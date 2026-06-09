@@ -194,18 +194,6 @@ export default function MyTeam() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-12 relative">
-      
-      <nav className="bg-slate-900 text-white p-4 shadow-md">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold tracking-tight">Retro FPL</h1>
-          <div className="space-x-6 text-sm font-medium flex items-center">
-            <a href="/" className="hover:text-emerald-400 transition">Dashboard</a>
-            <a href="/my-team" className="text-emerald-400">My Team</a>
-            <a href="/transfers" className="hover:text-emerald-400 transition">Transfers</a>
-            <button onClick={handleLogout} className="text-slate-400 hover:text-rose-400 transition ml-4 border-l border-slate-700 pl-4">Log Out</button>
-          </div>
-        </div>
-      </nav>
 
       {hasLineupChanged && (
         <div className="bg-amber-100 border-b border-amber-200 p-4 sticky top-0 z-50 shadow-sm">

@@ -229,17 +229,6 @@ export default function TransfersHub() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-12">
-      <nav className="bg-slate-900 text-white p-4 shadow-md">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <h1 className="text-xl font-bold tracking-tight">Retro FPL</h1>
-          <div className="space-x-6 text-sm font-medium">
-            <a href="/" className="hover:text-emerald-400 transition">Dashboard</a>
-            <a href="/my-team" className="hover:text-emerald-400 transition">My Team</a>
-            <a href="/transfers" className="text-emerald-400">Transfers</a>
-            <a href="/leagues" className="hover:text-emerald-400 transition">Leagues</a>
-          </div>
-        </div>
-      </nav>
 
       <main className="max-w-6xl mx-auto py-8 px-4">
         
