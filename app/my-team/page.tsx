@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import PageSkeleton from '../../components/PageSkeleton';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -187,7 +188,42 @@ useEffect(() => {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen flex items-center justify-center bg-slate-50 font-bold text-slate-500">Loading your squad...</div>;
+    return (
+      <PageSkeleton>
+        <div className="min-h-screen bg-slate-50 font-sans pb-12 relative">
+          <main className="max-w-6xl mx-auto py-8 px-4 space-y-8">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+              <div className="space-y-3">
+                <div className="h-8 w-64 bg-slate-200 rounded-full" />
+                <div className="h-4 w-40 bg-slate-200 rounded-full" />
+              </div>
+              <div className="flex gap-6 text-center">
+                <div className="h-16 w-32 bg-slate-200 rounded-3xl" />
+                <div className="h-16 w-32 bg-slate-200 rounded-3xl" />
+                <div className="h-16 w-32 bg-slate-200 rounded-3xl" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              <div className="lg:col-span-8 space-y-6">
+                <div className="h-16 bg-slate-200 rounded-3xl" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {Array.from({ length: 6 }).map((_, idx) => (
+                    <div key={idx} className="h-28 bg-slate-200 rounded-3xl" />
+                  ))}
+                </div>
+              </div>
+
+              <div className="lg:col-span-4 space-y-6">
+                <div className="h-12 bg-slate-200 rounded-3xl" />
+                <div className="h-12 bg-slate-200 rounded-3xl" />
+                <div className="h-12 bg-slate-200 rounded-3xl" />
+              </div>
+            </div>
+          </main>
+        </div>
+      </PageSkeleton>
+    );
   }
 
   const hasLineupChanged = JSON.stringify(currentSquad) !== JSON.stringify(dbSquad);

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, use } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import PageSkeleton from '../../../components/PageSkeleton';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -141,10 +142,52 @@ export default function OpponentTeamViewer({ params }: { params: Promise<{ id: s
 
   if (isLoading && !managerInfo) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 animate-pulse max-w-4xl mx-auto space-y-6">
-        <div className="h-12 w-1/3 bg-slate-200 rounded"></div>
-        <div className="h-64 bg-slate-200 rounded-xl"></div>
-      </div>
+      <PageSkeleton>
+        <div className="min-h-screen bg-slate-50 font-sans py-10 px-4">
+          <div className="max-w-4xl mx-auto space-y-8">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+              <div>
+                <span className="inline-block h-4 w-32 rounded-full bg-slate-200" />
+                <div className="mt-4 space-y-3">
+                  <span className="block h-8 w-64 rounded-full bg-slate-200" />
+                  <span className="block h-4 w-40 rounded-full bg-slate-200" />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="inline-block h-4 w-16 rounded-full bg-slate-200" />
+                <span className="inline-block h-10 w-40 rounded-xl bg-slate-200" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="md:col-span-2 space-y-4">
+                <div className="h-10 bg-slate-200 rounded-xl" />
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <div key={index} className="p-4 flex justify-between items-center">
+                      <div className="space-y-2">
+                        <span className="block h-4 w-48 rounded-full bg-slate-200" />
+                        <span className="block h-3 w-32 rounded-full bg-slate-200" />
+                      </div>
+                      <span className="inline-block h-4 w-16 rounded-full bg-slate-200" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="h-10 bg-slate-200 rounded-xl" />
+                <div className="bg-slate-100 rounded-xl border border-slate-200 shadow-inner p-4 space-y-3">
+                  {Array.from({ length: 3 }).map((_, index) => (
+                    <div key={index} className="h-14 bg-white rounded-lg border border-slate-200 shadow-sm" />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </PageSkeleton>
     );
   }
 

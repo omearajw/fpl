@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import PageSkeleton from '../components/PageSkeleton';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -180,15 +181,39 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 animate-pulse">
-        <div className="max-w-6xl mx-auto space-y-8">
-          <div className="h-16 bg-slate-200 rounded-xl"></div>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 h-64 bg-slate-200 rounded-xl"></div>
-            <div className="h-96 bg-slate-200 rounded-xl"></div>
-          </div>
+      <PageSkeleton>
+        <div className="min-h-screen bg-slate-50 font-sans">
+          <main className="max-w-6xl mx-auto py-8 px-4 grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2 space-y-8">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-900">Welcome back, Manager</h2>
+                <p className="text-slate-500 font-medium">Your team name here</p>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-4">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <div key={idx} className="h-24 bg-slate-200 rounded-3xl" />
+                ))}
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="bg-slate-800 text-white p-4" />
+                <div className="p-6 prose max-w-none text-slate-700 space-y-4">
+                  <div className="h-5 w-3/4 bg-slate-200 rounded-full" />
+                  <div className="h-5 w-full bg-slate-200 rounded-full" />
+                  <div className="h-5 w-5/6 bg-slate-200 rounded-full" />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden space-y-6 p-6">
+              <div className="h-10 bg-slate-200 rounded-xl" />
+              <div className="h-10 bg-slate-200 rounded-xl" />
+              <div className="h-10 bg-slate-200 rounded-xl" />
+            </div>
+          </main>
         </div>
-      </div>
+      </PageSkeleton>
     );
   }
 

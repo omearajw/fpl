@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, use } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import PageSkeleton from '../../components/PageSkeleton';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -152,16 +153,63 @@ export default function LeagueTables() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 p-8 animate-pulse">
-        <div className="max-w-5xl mx-auto space-y-6">
-          <div className="h-12 w-64 bg-slate-200 rounded"></div>
-          <div className="flex space-x-2 border-b border-slate-200 mb-6">
-            <div className="h-10 w-32 bg-slate-200 rounded-t-lg"></div>
-            <div className="h-10 w-32 bg-slate-200 rounded-t-lg"></div>
-          </div>
-          <div className="h-96 bg-slate-200 rounded-xl"></div>
+      <PageSkeleton>
+        <div className="min-h-screen bg-slate-50 font-sans">
+          <main className="max-w-5xl mx-auto py-10 px-4">
+            <div className="mb-8">
+              <h2 className="text-3xl font-extrabold text-slate-900">League Standings</h2>
+              <p className="text-slate-500 mt-2">End of season promotion and relegation thresholds are marked below.</p>
+            </div>
+
+            <div className="flex flex-wrap gap-2 mb-6 border-b border-slate-200">
+              {Array.from({ length: 4 }).map((_, idx) => (
+                <button
+                  key={idx}
+                  className="px-6 py-3 text-sm font-bold rounded-t-lg text-slate-500 bg-slate-100"
+                />
+              ))}
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-800 text-white text-xs uppercase tracking-wider">
+                    <th className="p-4 font-semibold w-16 text-center">Rank</th>
+                    <th className="p-4 font-semibold">Team & Manager</th>
+                    <th className="p-4 font-semibold text-center w-24">GW Pts</th>
+                    <th className="p-4 font-semibold text-center w-24">Total Pts</th>
+                    <th className="p-4 font-semibold text-center w-32">Transfers Left</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <tr key={index}>
+                      <td className="p-4 text-center font-mono font-bold text-slate-700">
+                        <span className="inline-block h-4 w-10 rounded-full bg-slate-200" />
+                      </td>
+                      <td className="p-4">
+                        <div className="space-y-2">
+                          <span className="inline-block h-4 w-40 rounded-full bg-slate-200" />
+                          <span className="inline-block h-3 w-28 rounded-full bg-slate-200" />
+                        </div>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="inline-block h-4 w-12 rounded-full bg-slate-200" />
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="inline-block h-4 w-14 rounded-full bg-slate-200" />
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="inline-block h-4 w-10 rounded-full bg-slate-200" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </main>
         </div>
-      </div>
+      </PageSkeleton>
     );
   }
 
