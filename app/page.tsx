@@ -42,32 +42,57 @@ export default function Dashboard() {
 
       if (profileData) setManagerInfo(profileData);
 
-      // 3. Fetch Real League Standings
-      const { data: standingsData } = await supabase
-        .from('league_standings')
-        .select(`
-          user_id, 
-          gameweek_points, 
-          users (team_name, manager_name)
-        `)
-        .order('gameweek_points', { ascending: false });
 
-      if (standingsData && standingsData.length > 0) {
-        const rankIndex = standingsData.findIndex(s => s.user_id === uid);
-        if (rankIndex !== -1) {
-          setUserRank(rankIndex + 1);
-          setUserPoints(standingsData[rankIndex].gameweek_points || 0);
+      // 3. Fetch league-mates using the current user's league_id
+      const leagueId = profileData?.league_id;
+
+      if (leagueId) {
+        const { data: leagueMates } = await supabase
+          .from('users')
+          .select('id')
+          .eq('league_id', leagueId);
+
+        const leagueMateIds = leagueMates?.map(u => u.id) ?? [];
+
+        const { data: scoresData } = await supabase
+          .from('gameweek_scores')
+          .select(`
+            user_id,
+            gameweek,
+            running_total,
+            users (team_name, manager_name)
+          `)
+          .in('user_id', leagueMateIds)
+          .order('gameweek', { ascending: false });
+
+        if (scoresData && scoresData.length > 0) {
+          // Deduplicate: keep only the latest row per user (highest gameweek = current running_total)
+          const latestByUser = new Map<string, any>();
+          for (const row of scoresData) {
+            if (!latestByUser.has(row.user_id)) {
+              latestByUser.set(row.user_id, row);
+            }
+          }
+
+          const standingsData = Array.from(latestByUser.values())
+            .sort((a, b) => (b.running_total || 0) - (a.running_total || 0));
+
+          const rankIndex = standingsData.findIndex(s => s.user_id === uid);
+          if (rankIndex !== -1) {
+            setUserRank(rankIndex + 1);
+            setUserPoints(standingsData[rankIndex].running_total || 0);
+          }
+
+          const formattedTop5 = standingsData.slice(0, 5).map((s: any, index: number) => ({
+            rank: index + 1,
+            name: s.users?.team_name || 'Unknown Team',
+            manager: s.users?.manager_name || 'Unknown',
+            pts: s.running_total || 0,
+            highlight: s.user_id === uid
+          }));
+
+          setTopStandings(formattedTop5);
         }
-
-        const formattedTop5 = standingsData.slice(0, 5).map((s: any, index: number) => ({
-          rank: index + 1,
-          name: s.users?.team_name || 'Unknown Team',
-          manager: s.users?.manager_name || 'Unknown',
-          pts: s.gameweek_points || 0,
-          highlight: s.user_id === uid
-        }));
-        
-        setTopStandings(formattedTop5);
       }
 
       // 4. Fetch Latest Newsletter
