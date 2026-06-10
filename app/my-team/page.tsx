@@ -19,12 +19,13 @@ export default function MyTeam() {
   const [currentSquad, setCurrentSquad] = useState<any[]>([]); 
   const [managerInfo, setManagerInfo] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeGameweek, setActiveGameweek] = useState<number>(1);
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [isSavingLineup, setIsSavingLineup] = useState(false);
   const [swapError, setSwapError] = useState('');
 
-  useEffect(() => {
+useEffect(() => {
     async function loadManagerData() {
       const { data: { session } } = await supabase.auth.getSession();
       
@@ -44,10 +45,24 @@ export default function MyTeam() {
 
       if (profileData) setManagerInfo(profileData);
 
+      // --- NEW: Find the latest active gameweek for this user ---
+      const { data: latestGwData } = await supabase
+        .from('rosters')
+        .select('gameweek')
+        .eq('user_id', uid)
+        .order('gameweek', { ascending: false })
+        .limit(1)
+        .single();
+
+      const activeGameweek = latestGwData?.gameweek || 1;
+      setActiveGameweek(activeGameweek);
+
+      // --- UPDATED: Filter the roster by that active gameweek ---
       const { data: rosterData } = await supabase
         .from('rosters')
         .select(`is_starter, purchase_price, players_cache(id, name, position, team, current_cost)`)
-        .eq('user_id', uid);
+        .eq('user_id', uid)
+        .eq('gameweek', activeGameweek); // <-- The crucial filter
 
       if (rosterData) {
         const formattedSquad = rosterData.map((row: any) => ({
@@ -152,7 +167,8 @@ export default function MyTeam() {
           .from('rosters')
           .update({ is_starter: p.isStarter })
           .eq('user_id', userId)
-          .eq('player_id', p.id);
+          .eq('player_id', p.id)
+          .eq('gameweek', activeGameweek);
       }
 
       setDbSquad([...currentSquad]);
@@ -168,11 +184,6 @@ export default function MyTeam() {
     setCurrentSquad([...dbSquad]);
     setSelectedPlayerId(null);
     setSwapError('');
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/login');
   };
 
   if (isLoading) {

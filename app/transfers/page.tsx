@@ -45,10 +45,23 @@ export default function TransfersHub() {
       
       if (profileData) setTransfersRemainingLimit(profileData.transfers_remaining);
 
+      // --- NEW: Find the latest active gameweek for this user ---
+      const { data: latestGwData } = await supabase
+        .from('rosters')
+        .select('gameweek')
+        .eq('user_id', uid)
+        .order('gameweek', { ascending: false })
+        .limit(1)
+        .single();
+
+      const activeGameweek = latestGwData?.gameweek || 1;
+
+      // --- UPDATED: Filter the roster by that active gameweek ---
       const { data: rosterData } = await supabase
         .from('rosters')
         .select(`is_starter, players_cache(id, name, position, team, current_cost)`)
-        .eq('user_id', uid);
+        .eq('user_id', uid)
+        .eq('gameweek', activeGameweek); // <-- The crucial filter
 
       if (rosterData) {
         const formattedSquad = rosterData.map((row: any) => ({
@@ -63,6 +76,7 @@ export default function TransfersHub() {
         setCurrentSquad([...formattedSquad]); 
       }
 
+      // Fetch Market Data
       const { data: marketData } = await supabase
         .from('players_cache')
         .select('*')
@@ -154,6 +168,17 @@ export default function TransfersHub() {
       // Filter to only the players that need to be inserted into the database
       const addedPlayers = finalSquad.filter(p => !dbSquad.some(db => db.id === p.id));
 
+      // --- NEW: FETCH ACTIVE GAMEWEEK BEFORE SAVING ---
+      const { data: latestGwData } = await supabase
+        .from('rosters')
+        .select('gameweek')
+        .eq('user_id', userId)
+        .order('gameweek', { ascending: false })
+        .limit(1)
+        .single();
+
+      const activeGameweek = latestGwData?.gameweek || 1;
+
       if (!isInitialDraft && transfersPending > 0) {
         const newTotal = transfersRemainingLimit - transfersPending;
         await supabase
@@ -167,16 +192,17 @@ export default function TransfersHub() {
           .from('rosters')
           .delete()
           .in('player_id', removedPlayerIds)
-          .eq('user_id', userId);
+          .eq('user_id', userId)
+          .eq('gameweek', activeGameweek); // Make sure we only delete from the current GW!
       }
 
       if (addedPlayers.length > 0) {
         const insertPayload = addedPlayers.map(p => ({
           user_id: userId,
           player_id: p.id,
-          gameweek: 1, 
+          gameweek: activeGameweek, // <-- THIS FIXES THE DISAPPEARING PLAYER BUG
           purchase_price: p.price,
-          is_starter: p.isStarter // This will now accurately save true or false!
+          is_starter: p.isStarter 
         }));
 
         await supabase

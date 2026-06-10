@@ -132,6 +132,27 @@ export default function Dashboard() {
     setIsLoading(false);
   };
 
+  const handleResetSeason = async () => {
+    const isConfirmed = window.confirm("⚠️ DANGER: Are you sure you want to completely reset the season? This will delete all points and revert all rosters to Gameweek 1.");
+    if (!isConfirmed) return;
+
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/admin/reset-season', { method: 'POST' });
+      const data = await res.json();
+      
+      if (res.ok) {
+        alert(data.message);
+        window.location.reload();
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (err) {
+      alert("Failed to reset season.");
+    }
+    setIsLoading(false);
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 p-8 animate-pulse">
@@ -216,6 +237,13 @@ export default function Dashboard() {
               className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2 px-6 rounded shadow transition"
             >
               Seed 🤖 Bot Teams
+            </button>
+
+            <button 
+              onClick={handleResetSeason}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded shadow transition mt-4 border border-red-800"
+            >
+              ⚠️ Reset Entire Season to GW1
             </button>
             
             <p className="text-xs text-rose-500 font-medium">Use these to test the league mechanics during the off-season.</p>

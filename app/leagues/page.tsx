@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, use } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize Supabase
@@ -81,6 +81,7 @@ export default function LeagueTables() {
           
           if (l_id && groupedData[l_id]) {
             groupedData[l_id].push({
+              userId: row.user_id,
               teamName: row.users?.team_name || 'Unknown Team',
               manager: row.users?.manager_name || 'Unknown',
               gwPoints: row.points_earned || 0,
@@ -225,7 +226,7 @@ export default function LeagueTables() {
                       {/* Team Info */}
                       <td className="p-4">
                         <div className="flex flex-col">
-                          <a href="#" className="font-bold text-slate-900 hover:text-emerald-600 transition">
+                          <a href={`/team/${team.userId || team.user_id}`} className="font-bold text-slate-900 hover:text-emerald-600 transition">
                             {team.teamName}
                           </a>
                           <span className="text-slate-500 text-xs mt-0.5">{team.manager}</span>
