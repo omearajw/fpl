@@ -20,13 +20,20 @@ export default function MyTeam() {
   const [currentSquad, setCurrentSquad] = useState<any[]>([]); 
   const [managerInfo, setManagerInfo] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeGameweek, setActiveGameweek] = useState<number>(1);
+  
+  // Timeline States
+  const [activeGw, setActiveGw] = useState<number>(1);
+  const [nextGw, setNextGw] = useState<number>(1);
+  const [isLockedOut, setIsLockedOut] = useState<boolean>(false);
+  const [deadline, setDeadline] = useState<Date | null>(null);
+  const [countdownText, setCountdownText] = useState<string>('--h --m --s'); // Default skeleton state
+  const [isLimbo, setIsLimbo] = useState<boolean>(false); // NEW STATE
 
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [isSavingLineup, setIsSavingLineup] = useState(false);
   const [swapError, setSwapError] = useState('');
 
-useEffect(() => {
+  useEffect(() => {
     async function loadManagerData() {
       const { data: { session } } = await supabase.auth.getSession();
       
@@ -46,22 +53,29 @@ useEffect(() => {
 
       if (profileData) setManagerInfo(profileData);
 
-      // Read from the Master Clock
+      // Read from the Master Clock (Now including deadline_time)
       const { data: settingsData } = await supabase
         .from('system_settings')
-        .select('active_gameweek, next_gameweek')
+        .select('active_gameweek, next_gameweek, deadline_time')
         .single();
         
-      // Transfers and Pick Team always look at the active_gameweek
-      const activeGameweek = settingsData?.next_gameweek || 1;
-      setActiveGameweek(activeGameweek);
+      const currentActiveGw = settingsData?.active_gameweek || 1;
+      const currentNextGw = settingsData?.next_gameweek || 1;
+      
+      setActiveGw(currentActiveGw);
+      setNextGw(currentNextGw);
+      setIsLockedOut(currentActiveGw !== currentNextGw);
+      
+      if (settingsData?.deadline_time) {
+        setDeadline(new Date(settingsData.deadline_time));
+      }
 
-      // --- UPDATED: Filter the roster by that active gameweek ---
+      // My Team always looks at the NEXT gameweek so managers can prepare
       const { data: rosterData } = await supabase
         .from('rosters')
         .select(`is_starter, purchase_price, players_cache(id, name, position, team, current_cost)`)
         .eq('user_id', uid)
-        .eq('gameweek', activeGameweek); // <-- The crucial filter
+        .eq('gameweek', currentNextGw); 
 
       if (rosterData) {
         const formattedSquad = rosterData.map((row: any) => ({
@@ -83,6 +97,71 @@ useEffect(() => {
     loadManagerData();
   }, [router]);
 
+  // --- ZERO-DELAY COUNTDOWN TIMER ENGINE ---
+  useEffect(() => {
+    if (!deadline || isLockedOut) return;
+
+    const updateTimer = () => {
+      const now = new Date();
+      const diff = deadline.getTime() - now.getTime();
+
+      if (diff <= 0) {
+        setCountdownText('DEADLINE PASSED');
+        setIsLimbo(true); // Trigger the full-page block!
+        return false; 
+      } else {
+        const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const h = Math.floor((diff / (1000 * 60 * 60)) % 24);
+        const m = Math.floor((diff / 1000 / 60) % 60);
+        const s = Math.floor((diff / 1000) % 60);
+        
+        const pad = (num: number) => num.toString().padStart(2, '0');
+        setCountdownText(`${d > 0 ? `${d}d ` : ''}${pad(h)}h ${pad(m)}m ${pad(s)}s`);
+        return true; // Tell interval to keep going
+      }
+    };
+
+    // Run immediately so the UI doesn't flash
+    const keepRunning = updateTimer();
+    if (!keepRunning) return;
+
+    // Hand off to the interval
+    const interval = setInterval(() => {
+      const shouldContinue = updateTimer();
+      if (!shouldContinue) clearInterval(interval);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [deadline, isLockedOut]);
+
+  // --- THE LIMBO RECOVERY POLL ---
+  useEffect(() => {
+    if (!isLimbo) return;
+
+    const checkBackendSync = async () => {
+      const { data } = await supabase
+        .from('system_settings')
+        .select('next_gameweek, deadline_time')
+        .eq('id', 1) // Explicitly target the master row to bypass cache
+        .single();
+        
+      if (data) {
+        // 1. Did the backend successfully trigger the lockout?
+        const isTimelineSplit = data.next_gameweek > nextGw;
+        
+        // 2. Did the Admin manually push the deadline into the future to fix a stale database?
+        const isDeadlineFixed = new Date(data.deadline_time) > new Date();
+
+        if (isTimelineSplit || isDeadlineFixed) {
+           window.location.reload(); 
+        }
+      }
+    };
+
+    const pollInterval = setInterval(checkBackendSync, 3000); 
+    return () => clearInterval(pollInterval);
+  }, [isLimbo, nextGw]);
+
   // --- SMART DIMMING LOGIC ---
   const startersCount = { GK: 0, DEF: 0, MID: 0, FWD: 0 };
   currentSquad.filter(p => p.isStarter).forEach(p => {
@@ -90,21 +169,17 @@ useEffect(() => {
   });
 
   const isSwapValid = (p1: any, p2: any) => {
-    // Changing selection to another player of the same type is always allowed
     if (p1.isStarter === p2.isStarter) return true; 
     
     const starter = p1.isStarter ? p1 : p2;
     const bench = p1.isStarter ? p2 : p1;
 
-    // GKs can only ever swap with GKs
     if (starter.pos === 'GK' || bench.pos === 'GK') {
       return starter.pos === 'GK' && bench.pos === 'GK';
     }
 
-    // Like-for-like outfield swaps are always valid
     if (starter.pos === bench.pos) return true;
 
-    // If swapping for a different position, ensure we don't break the minimums
     if (startersCount[starter.pos as keyof typeof startersCount] <= MIN_STARTERS[starter.pos]) {
       return false;
     }
@@ -134,14 +209,12 @@ useEffect(() => {
       return;
     }
 
-    // Double check validity just in case they click a dimmed player
     if (!isSwapValid(player1, player2)) {
       setSwapError("That substitution would result in an illegal formation.");
       setSelectedPlayerId(null);
       return;
     }
 
-    // Execute Swap
     const proposedSquad = currentSquad.map(p => {
       if (p.id === player1.id) return { ...p, isStarter: player2.isStarter };
       if (p.id === player2.id) return { ...p, isStarter: player1.isStarter };
@@ -167,7 +240,7 @@ useEffect(() => {
           .update({ is_starter: p.isStarter })
           .eq('user_id', userId)
           .eq('player_id', p.id)
-          .eq('gameweek', activeGameweek);
+          .eq('gameweek', nextGw); // Ensure we save to the NEXT gameweek!
       }
 
       setDbSquad([...currentSquad]);
@@ -190,6 +263,7 @@ useEffect(() => {
       <PageSkeleton>
         <div className="min-h-screen bg-slate-50 font-sans pb-12 relative">
           <main className="max-w-6xl mx-auto py-8 px-4 space-y-8">
+            <div className="h-16 bg-slate-200 rounded-xl mb-6" />
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
               <div className="space-y-3">
                 <div className="h-8 w-64 bg-slate-200 rounded-full" />
@@ -240,6 +314,24 @@ useEffect(() => {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-12 relative">
 
+      {/* --- SLEEK LIMBO OVERLAY --- */}
+      {isLimbo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 transition-all">
+          <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-slate-200">
+            <div className="flex justify-center mb-4">
+              <svg className="animate-spin h-10 w-10 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-2">Finalizing Deadline</h2>
+            <p className="text-sm text-slate-500 font-medium">
+              The transfer window is currently closing. Please wait while we sync the live gameweek.
+            </p>
+          </div>
+        </div>
+      )}
+
       {hasLineupChanged && (
         <div className="bg-amber-100 border-b border-amber-200 p-4 sticky top-0 z-50 shadow-sm">
           <div className="max-w-6xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -255,10 +347,12 @@ useEffect(() => {
               </button>
               <button 
                 onClick={handleSaveLineup}
-                disabled={isSavingLineup}
-                className="px-6 py-2 text-sm font-bold text-white bg-amber-500 rounded hover:bg-amber-600 shadow transition"
+                disabled={isSavingLineup || isLimbo}
+                className={`px-6 py-2 text-sm font-bold text-white rounded shadow transition ${
+                  isLimbo ? 'bg-slate-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600'
+                }`}
               >
-                {isSavingLineup ? 'Saving...' : 'Save Lineup'}
+                {isSavingLineup ? 'Saving...' : (isLimbo ? 'Syncing Deadline...' : 'Save Lineup')}
               </button>
             </div>
           </div>
@@ -266,11 +360,41 @@ useEffect(() => {
       )}
 
       <main className="max-w-6xl mx-auto py-8 px-4">
+
+        {/* --- DYNAMIC TIMELINE STATUS BANNER WITH TIMER --- */}
+        {isLockedOut ? (
+            <div className="bg-slate-900 text-rose-100 p-4 rounded-xl shadow-sm mb-6 flex items-center justify-between border border-slate-800">
+              <div className="flex items-center gap-4">
+                <span className="flex h-4 w-4 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-500"></span>
+                </span>
+                <div>
+                  <h3 className="font-bold text-white text-lg">Gameweek {activeGw} is Live!</h3>
+                  <p className="text-sm text-slate-300">The deadline has passed. Any transfers you make now will apply to <strong>Gameweek {nextGw}</strong>.</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-900 text-emerald-100 p-4 rounded-xl shadow-sm mb-6 flex items-center justify-between border border-emerald-800">
+              <div className="flex items-center gap-4">
+                <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500"></span>
+                <div>
+                  <h3 className="font-bold text-white text-lg">Transfer Window Open</h3>
+                  <p className="text-sm text-emerald-200">You are building your squad for <strong>Gameweek {nextGw}</strong>. Make your moves before the deadline.</p>
+                </div>
+              </div>
+              <div className="bg-emerald-950/50 px-4 py-2 rounded border border-emerald-700 text-right">
+                <p className="text-[10px] uppercase font-bold tracking-widest text-emerald-400 mb-0.5">Time Remaining</p>
+                <p className="font-mono text-xl font-bold text-white min-w-[120px]">{countdownText}</p>
+              </div>
+            </div>
+          )}
         
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div>
             <h2 className="text-2xl font-extrabold text-slate-900">{managerInfo?.team_name || 'My Team'}</h2>
-            <p className="text-slate-500 font-medium">Manager: {managerInfo?.manager_name}</p>
+            <p className="text-slate-500 font-medium">Manager: {managerInfo?.manager_name} • Gameweek {nextGw}</p>
           </div>
           
           <div className="flex gap-6 text-center">
@@ -321,13 +445,9 @@ useEffect(() => {
                   <div key={index} className="flex justify-center gap-4 sm:gap-8">
                     {row.map(player => {
                       const isSelected = selectedPlayerId === player.id;
-                      
-                      // Check if this player is a valid swap target
                       const isValid = selectedPlayerId 
                         ? isSwapValid(currentSquad.find(p => p.id === selectedPlayerId), player) 
                         : true;
-                      
-                      // Dim them if a player is selected, THIS player is not selected, and it's an invalid swap
                       const isDimmed = selectedPlayerId && !isSelected && !isValid;
                       
                       return (
@@ -368,11 +488,9 @@ useEffect(() => {
               <div className="flex justify-center gap-4 sm:gap-8">
                 {bench.map(player => {
                   const isSelected = selectedPlayerId === player.id;
-                  
                   const isValid = selectedPlayerId 
                     ? isSwapValid(currentSquad.find(p => p.id === selectedPlayerId), player) 
                     : true;
-                  
                   const isDimmed = selectedPlayerId && !isSelected && !isValid;
                   
                   return (

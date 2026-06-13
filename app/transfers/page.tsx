@@ -19,6 +19,14 @@ export default function TransfersHub() {
   const [dbSquad, setDbSquad] = useState<any[]>([]);
   const [transfersRemainingLimit, setTransfersRemainingLimit] = useState(8);
   
+  // Timeline States
+  const [activeGw, setActiveGw] = useState<number>(1);
+  const [nextGw, setNextGw] = useState<number>(1);
+  const [isLockedOut, setIsLockedOut] = useState<boolean>(false);
+  const [deadline, setDeadline] = useState<Date | null>(null);
+  const [countdownText, setCountdownText] = useState<string>('--h --m --s'); // Default skeleton state
+  const [isLimbo, setIsLimbo] = useState<boolean>(false); // NEW STATE
+
   const [marketPlayers, setMarketPlayers] = useState<any[]>([]);
   const [currentSquad, setCurrentSquad] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,6 +46,7 @@ export default function TransfersHub() {
       const uid = session.user.id;
       setUserId(uid);
 
+      // Fetch User Profile
       const { data: profileData } = await supabase
         .from('users')
         .select('transfers_remaining')
@@ -46,23 +55,29 @@ export default function TransfersHub() {
       
       if (profileData) setTransfersRemainingLimit(profileData.transfers_remaining);
 
-      // --- NEW: Find the latest active gameweek for this user ---
-      const { data: latestGwData } = await supabase
-        .from('rosters')
-        .select('gameweek')
-        .eq('user_id', uid)
-        .order('gameweek', { ascending: false })
-        .limit(1)
+      // --- NEW: Read from the Master Clock with Deadline ---
+      const { data: settingsData } = await supabase
+        .from('system_settings')
+        .select('active_gameweek, next_gameweek, deadline_time')
         .single();
 
-      const activeGameweek = latestGwData?.gameweek || 1;
+      const currentActiveGw = settingsData?.active_gameweek || 1;
+      const currentNextGw = settingsData?.next_gameweek || 1;
+      
+      setActiveGw(currentActiveGw);
+      setNextGw(currentNextGw);
+      setIsLockedOut(currentActiveGw !== currentNextGw); 
+      
+      if (settingsData?.deadline_time) {
+        setDeadline(new Date(settingsData.deadline_time));
+      }
 
-      // --- UPDATED: Filter the roster by that active gameweek ---
+      // Filter the roster strictly by next_gameweek
       const { data: rosterData } = await supabase
         .from('rosters')
         .select(`is_starter, players_cache(id, name, position, team, current_cost)`)
         .eq('user_id', uid)
-        .eq('gameweek', activeGameweek); // <-- The crucial filter
+        .eq('gameweek', currentNextGw); 
 
       if (rosterData) {
         const formattedSquad = rosterData.map((row: any) => ({
@@ -94,6 +109,71 @@ export default function TransfersHub() {
     loadData();
   }, [router]);
 
+  // --- ZERO-DELAY COUNTDOWN TIMER ENGINE ---
+  useEffect(() => {
+    if (!deadline || isLockedOut) return;
+
+    const updateTimer = () => {
+      const now = new Date();
+      const diff = deadline.getTime() - now.getTime();
+
+      if (diff <= 0) {
+        setCountdownText('DEADLINE PASSED');
+        setIsLimbo(true); // Trigger the full-page block!
+        return false; 
+      } else {
+        const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const h = Math.floor((diff / (1000 * 60 * 60)) % 24);
+        const m = Math.floor((diff / 1000 / 60) % 60);
+        const s = Math.floor((diff / 1000) % 60);
+        
+        const pad = (num: number) => num.toString().padStart(2, '0');
+        setCountdownText(`${d > 0 ? `${d}d ` : ''}${pad(h)}h ${pad(m)}m ${pad(s)}s`);
+        return true; // Tell interval to keep going
+      }
+    };
+
+    // Run immediately so the UI doesn't flash
+    const keepRunning = updateTimer();
+    if (!keepRunning) return;
+
+    // Hand off to the interval
+    const interval = setInterval(() => {
+      const shouldContinue = updateTimer();
+      if (!shouldContinue) clearInterval(interval);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [deadline, isLockedOut]);
+
+  // --- THE LIMBO RECOVERY POLL ---
+  useEffect(() => {
+    if (!isLimbo) return;
+
+    const checkBackendSync = async () => {
+      const { data } = await supabase
+        .from('system_settings')
+        .select('next_gameweek, deadline_time')
+        .eq('id', 1) // Explicitly target the master row to bypass cache
+        .single();
+        
+      if (data) {
+        // 1. Did the backend successfully trigger the lockout?
+        const isTimelineSplit = data.next_gameweek > nextGw;
+        
+        // 2. Did the Admin manually push the deadline into the future to fix a stale database?
+        const isDeadlineFixed = new Date(data.deadline_time) > new Date();
+
+        if (isTimelineSplit || isDeadlineFixed) {
+           window.location.reload(); 
+        }
+      }
+    };
+
+    const pollInterval = setInterval(checkBackendSync, 3000); 
+    return () => clearInterval(pollInterval);
+  }, [isLimbo, nextGw]);
+
   const isInitialDraft = dbSquad.length === 0;
   const squadValue = currentSquad.reduce((acc, player) => acc + player.price, 0);
   const bank = +(100.0 - squadValue).toFixed(1);
@@ -120,14 +200,12 @@ export default function TransfersHub() {
     if ((posCounts[player.pos] || 0) >= POS_LIMITS[player.pos]) return;
     if (currentSquad.some(p => p.id === player.id)) return; 
     
-    // --- NEW: SMART INHERITANCE ---
     let willBeStarter = true;
     if (!isInitialDraft) {
       const startersCount = currentSquad.filter(p => p.isStarter).length;
       const startersInPos = currentSquad.filter(p => p.isStarter && p.pos === player.pos).length;
       const maxStarters: Record<string, number> = { GK: 1, DEF: 5, MID: 5, FWD: 3 };
       
-      // If the pitch is full, or they already have max starters for this position, force to bench
       if (startersCount >= 11 || startersInPos >= maxStarters[player.pos]) {
         willBeStarter = false;
       }
@@ -143,15 +221,12 @@ export default function TransfersHub() {
     try {
       let finalSquad = [...currentSquad];
 
-      // --- NEW: 4-4-2 AUTO-SORT MATH ---
       if (isInitialDraft) {
-        // Sort each positional group by price (most expensive first)
         const gks = finalSquad.filter(p => p.pos === 'GK').sort((a, b) => b.price - a.price);
         const defs = finalSquad.filter(p => p.pos === 'DEF').sort((a, b) => b.price - a.price);
         const mids = finalSquad.filter(p => p.pos === 'MID').sort((a, b) => b.price - a.price);
         const fwds = finalSquad.filter(p => p.pos === 'FWD').sort((a, b) => b.price - a.price);
 
-        // Slice the top players to form a 4-4-2
         const starting11Ids = [
           ...gks.slice(0, 1),
           ...defs.slice(0, 4),
@@ -159,24 +234,13 @@ export default function TransfersHub() {
           ...fwds.slice(0, 2)
         ].map(p => p.id);
 
-        // Re-map the array with the new boolean values
         finalSquad = finalSquad.map(p => ({
           ...p,
           isStarter: starting11Ids.includes(p.id)
         }));
       }
 
-      // Filter to only the players that need to be inserted into the database
       const addedPlayers = finalSquad.filter(p => !dbSquad.some(db => db.id === p.id));
-
-      // Read from the Master Clock
-      const { data: settingsData } = await supabase
-        .from('system_settings')
-        .select('active_gameweek, next_gameweek')
-        .single();
-        
-      // Transfers and Pick Team always look at the active_gameweek
-      const activeGameweek = settingsData?.next_gameweek || 1;
 
       if (!isInitialDraft && transfersPending > 0) {
         const newTotal = transfersRemainingLimit - transfersPending;
@@ -192,14 +256,14 @@ export default function TransfersHub() {
           .delete()
           .in('player_id', removedPlayerIds)
           .eq('user_id', userId)
-          .eq('gameweek', activeGameweek); // Make sure we only delete from the current GW!
+          .eq('gameweek', nextGw);
       }
 
       if (addedPlayers.length > 0) {
         const insertPayload = addedPlayers.map(p => ({
           user_id: userId,
           player_id: p.id,
-          gameweek: activeGameweek, // <-- THIS FIXES THE DISAPPEARING PLAYER BUG
+          gameweek: nextGw,
           purchase_price: p.price,
           is_starter: p.isStarter 
         }));
@@ -253,6 +317,7 @@ export default function TransfersHub() {
       <PageSkeleton>
         <div className="min-h-screen bg-slate-50 font-sans pb-12">
           <main className="max-w-6xl mx-auto py-8 px-4 space-y-8">
+            <div className="h-16 bg-slate-200 rounded-xl mb-6" />
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
               <div className="space-y-3">
                 <div className="h-8 w-72 bg-slate-200 rounded-full" />
@@ -288,12 +353,62 @@ export default function TransfersHub() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-12">
 
+      {/* --- SLEEK LIMBO OVERLAY --- */}
+      {isLimbo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 transition-all">
+          <div className="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-slate-200">
+            <div className="flex justify-center mb-4">
+              <svg className="animate-spin h-10 w-10 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-2">Finalizing Deadline</h2>
+            <p className="text-sm text-slate-500 font-medium">
+              The transfer window is currently closing. Please wait while we sync the live gameweek.
+            </p>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto py-8 px-4">
+        
+        {/* --- DYNAMIC TIMELINE STATUS BANNER WITH TIMER --- */}
+        {!isInitialDraft && (
+          isLockedOut ? (
+            <div className="bg-slate-900 text-rose-100 p-4 rounded-xl shadow-sm mb-6 flex items-center justify-between border border-slate-800">
+              <div className="flex items-center gap-4">
+                <span className="flex h-4 w-4 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-4 w-4 bg-rose-500"></span>
+                </span>
+                <div>
+                  <h3 className="font-bold text-white text-lg">Gameweek {activeGw} is Live!</h3>
+                  <p className="text-sm text-slate-300">The deadline has passed. Any transfers you make now will apply to <strong>Gameweek {nextGw}</strong>.</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-emerald-900 text-emerald-100 p-4 rounded-xl shadow-sm mb-6 flex items-center justify-between border border-emerald-800">
+              <div className="flex items-center gap-4">
+                <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-500"></span>
+                <div>
+                  <h3 className="font-bold text-white text-lg">Transfer Window Open</h3>
+                  <p className="text-sm text-emerald-200">You are building your squad for <strong>Gameweek {nextGw}</strong>. Make your moves before the deadline.</p>
+                </div>
+              </div>
+              <div className="bg-emerald-950/50 px-4 py-2 rounded border border-emerald-700 text-right">
+                <p className="text-[10px] uppercase font-bold tracking-widest text-emerald-400 mb-0.5">Time Remaining</p>
+                <p className="font-mono text-xl font-bold text-white min-w-[120px]">{countdownText}</p>
+              </div>
+            </div>
+          )
+        )}
         
         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
           <div>
             <h2 className="text-2xl font-extrabold text-slate-900">
-              {isInitialDraft ? 'Initial Draft Selection' : 'Transfer Market'}
+              {isInitialDraft ? 'Initial Draft Selection' : `Transfers • GW ${nextGw}`}
             </h2>
             <p className="text-slate-500 font-medium">
               {isInitialDraft ? 'Build your starting 15 for free.' : 'Build your squad carefully.'}
@@ -480,15 +595,15 @@ export default function TransfersHub() {
               </div>
               <button 
               onClick={handleConfirmTransfers}
-              disabled={!canConfirm || isSaving}
+              disabled={!canConfirm || isSaving || isLimbo}
               className={`px-8 py-2.5 font-bold rounded-lg transition ${
-                canConfirm 
+                canConfirm && !isLimbo
                   ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md' 
                   : 'bg-slate-300 text-slate-500 cursor-not-allowed'
               }`}
-              >
-                {isSaving ? 'Saving Team...' : (isInitialDraft ? 'Save Initial Draft' : 'Confirm Transfers')}
-              </button>
+            >
+              {isSaving ? 'Saving Team...' : (isLimbo ? 'Syncing Deadline...' : (isInitialDraft ? 'Save Initial Draft' : 'Confirm Transfers'))}
+            </button>
           </div>
 
         </div>

@@ -115,18 +115,24 @@ export async function GET(request: Request) {
     // 8. --- THE TUESDAY AUTO-ROLLOVER ---
     // ==========================================
     if (isTuesdayRollover) {
-      // NOTE: Roster duplication has been moved to the Lockout script!
-      
-      // We just need to advance the Active Master Clock to catch up to the Next GW
+      // Calculate the exact date/time for the upcoming Saturday at 11:00 AM UTC
+      const nextDeadline = new Date();
+      // Math to find the next Saturday (Day 6)
+      nextDeadline.setUTCDate(nextDeadline.getUTCDate() + ((6 - nextDeadline.getUTCDay() + 7) % 7));
+      // Set to exactly 11:00:00.000 AM UTC
+      nextDeadline.setUTCHours(11, 0, 0, 0);
+
+      // Advance Active GW and set the new perfectly synced deadline
       await supabase
         .from('system_settings')
         .update({
-          active_gameweek: processingGW + 1
+          active_gameweek: processingGW + 1,
+          deadline_time: nextDeadline.toISOString()
         })
         .eq('id', 1);
 
       return NextResponse.json({ 
-        message: `SUCCESS: Gameweek ${processingGW} finalized! Active GW advanced to ${processingGW + 1}.`,
+        message: `SUCCESS: Gameweek ${processingGW} finalized! Active GW advanced to ${processingGW + 1}. Next deadline set to ${nextDeadline.toISOString()}`,
       });
     }
 
