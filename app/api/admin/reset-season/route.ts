@@ -1,18 +1,48 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
-import { verifyAdminAccess } from '../../auth';
+import { getSupabaseAdmin } from '../../auth';
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! 
-);
+const supabaseAdmin = getSupabaseAdmin();
 
 export async function POST(request: Request) {
-  // Verify CRON_SECRET
-  const authError = await verifyAdminAccess(request);
-  if (authError) return authError;
-
   try {
+    // Authenticate the user
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { persistSession: false } }
+    );
+    
+    const authHeader = request.headers.get('authorization');
+    let userId: string | null = null;
+
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      const { data } = await supabase.auth.getUser(token);
+      userId = data.user?.id || null;
+    }
+
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Please log in first' },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is an admin
+    const { data: user, error: adminError } = await supabaseAdmin
+      .from('users')
+      .select('is_admin')
+      .eq('id', userId)
+      .single();
+
+    if (adminError || !user || !user.is_admin) {
+      return NextResponse.json(
+        { error: 'Forbidden: User is not an admin' },
+        { status: 403 }
+      );
+    }
+
     // 1. Wipe all historical scores
     const { error: scoresError } = await supabaseAdmin
       .from('gameweek_scores')

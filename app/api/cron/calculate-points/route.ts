@@ -120,21 +120,31 @@ export async function GET(request: Request) {
     // 8. --- THE TUESDAY AUTO-ROLLOVER ---
     // ==========================================
     if (isTuesdayRollover) {
-      // Calculate the exact date/time for the upcoming Saturday at 11:00 AM UTC
       const nextDeadline = new Date();
-      // Math to find the next Saturday (Day 6)
-      nextDeadline.setUTCDate(nextDeadline.getUTCDate() + ((6 - nextDeadline.getUTCDay() + 7) % 7));
+      const currentDay = nextDeadline.getUTCDay(); // 0 = Sunday, 6 = Saturday
+      
+      // Calculate days until the NEXT Saturday
+      let daysUntilSaturday = 6 - currentDay;
+      
+      // If we run this on a Saturday (0) or somehow past it, force it to jump 7 days to next week
+      if (daysUntilSaturday <= 0) {
+        daysUntilSaturday += 7;
+      }
+
+      nextDeadline.setUTCDate(nextDeadline.getUTCDate() + daysUntilSaturday);
       // Set to exactly 11:00:00.000 AM UTC
       nextDeadline.setUTCHours(11, 0, 0, 0);
 
       // Advance Active GW and set the new perfectly synced deadline
-      await supabase
+      const { error: updateError } = await supabase
         .from('system_settings')
         .update({
           active_gameweek: processingGW + 1,
           deadline_time: nextDeadline.toISOString()
         })
         .eq('id', 1);
+
+      if (updateError) throw updateError;
 
       return NextResponse.json({ 
         message: `SUCCESS: Gameweek ${processingGW} finalized! Active GW advanced to ${processingGW + 1}. Next deadline set to ${nextDeadline.toISOString()}`,

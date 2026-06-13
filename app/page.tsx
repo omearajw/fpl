@@ -178,12 +178,23 @@ export default function Dashboard() {
   }, [router]);
 
   // --- DEVELOPER TOOL ACTIONS ---
+  const getAuthToken = async (): Promise<string | null> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || null;
+  };
+
   const handleTriggerLockout = async () => {
     const isConfirmed = window.confirm("Phase 1: Trigger Deadline Lockout? Transfers will be locked and Next GW advanced.");
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/lockout', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
+      const token = await getAuthToken();
+      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
+      
+      const res = await fetch('/api/admin/trigger-lockout', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -194,7 +205,14 @@ export default function Dashboard() {
   const handleUpdateLivePoints = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/calculate-points', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
+      const token = await getAuthToken();
+      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
+      
+      const res = await fetch('/api/admin/trigger-calculate-points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ isRollover: false })
+      });
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -207,7 +225,14 @@ export default function Dashboard() {
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/calculate-points?rollover=true', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
+      const token = await getAuthToken();
+      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
+      
+      const res = await fetch('/api/admin/trigger-calculate-points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ isRollover: true })
+      });
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -220,9 +245,12 @@ export default function Dashboard() {
     if (!amount || isNaN(Number(amount))) return;
     setIsLoading(true);
     try {
+      const token = await getAuthToken();
+      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
+      
       const res = await fetch('/api/admin/seed-bots', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.CRON_SECRET}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ count: Number(amount) }) 
       });
       const data = await res.json();
@@ -236,9 +264,12 @@ export default function Dashboard() {
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/reset-season', { 
+      const token = await getAuthToken();
+      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
+      
+      const res = await fetch('/api/admin/reset-season', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); } else { alert(`Error: ${data.error}`); }

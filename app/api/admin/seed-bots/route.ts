@@ -1,11 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
-import { verifyAdminAccess } from '../../auth';
+import { getSupabaseAdmin } from '../../auth';
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! // MUST use the service role key to create auth users
-);
+const supabaseAdmin = getSupabaseAdmin();
 
 // Helper function to get random elements from an array
 const getRandomPlayers = (array: any[], count: number) => {
@@ -14,11 +11,44 @@ const getRandomPlayers = (array: any[], count: number) => {
 };
 
 export async function POST(request: Request) {
-  // Verify CRON_SECRET
-  const authError = await verifyAdminAccess(request);
-  if (authError) return authError;
-
   try {
+    // Authenticate the user
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { persistSession: false } }
+    );
+    
+    const authHeader = request.headers.get('authorization');
+    let userId: string | null = null;
+
+    if (authHeader?.startsWith('Bearer ')) {
+      const token = authHeader.slice(7);
+      const { data } = await supabase.auth.getUser(token);
+      userId = data.user?.id || null;
+    }
+
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Please log in first' },
+        { status: 401 }
+      );
+    }
+
+    // Check if user is an admin
+    const { data: user, error: adminError } = await supabaseAdmin
+      .from('users')
+      .select('is_admin')
+      .eq('id', userId)
+      .single();
+
+    if (adminError || !user || !user.is_admin) {
+      return NextResponse.json(
+        { error: 'Forbidden: User is not an admin' },
+        { status: 403 }
+      );
+    }
+
     const { count, leagueId } = await request.json(); // How many bots to create
 
     // 1. Fetch the entire player market
