@@ -14,6 +14,10 @@ export default function AdminDashboard() {
   const [deadlineString, setDeadlineString] = useState<string>('');
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'loading' } | null>(null);
 
+  // Newsletter State
+  const [newsTitle, setNewsTitle] = useState('');
+  const [newsContent, setNewsContent] = useState('');
+
   useEffect(() => {
     const initAdmin = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -46,6 +50,28 @@ export default function AdminDashboard() {
     }
   };
 
+  const handlePublishNewsletter = async () => {
+    if (!newsTitle.trim() || !newsContent.trim()) {
+      setStatusMsg({ text: 'Both title and content are required to publish.', type: 'error' });
+      return;
+    }
+
+    setStatusMsg({ text: 'Publishing newsletter...', type: 'loading' });
+    try {
+      const { error } = await supabase
+        .from('newsletters')
+        .insert([{ title: newsTitle, content: newsContent }]);
+
+      if (error) throw error;
+      
+      setStatusMsg({ text: 'Newsletter published successfully to the dashboard!', type: 'success' });
+      setNewsTitle(''); // Clear the form
+      setNewsContent('');
+    } catch (err: any) {
+      setStatusMsg({ text: err.message, type: 'error' });
+    }
+  };
+
   const triggerApiRoute = async (url: string, actionName: string) => {
     if (!window.confirm(`Are you sure you want to run: ${actionName}?`)) return;
     setStatusMsg({ text: `Executing ${actionName}...`, type: 'loading' });
@@ -57,7 +83,7 @@ export default function AdminDashboard() {
       if (!token) throw new Error("Not authenticated. Please log in.");
 
       const res = await fetch(url, { 
-        method: 'POST', // *See note below about this!
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -68,7 +94,6 @@ export default function AdminDashboard() {
         throw new Error(`Server returned HTML. Route ${url} might not exist (404 Error).`);
       }
 
-      // THE FIX: Read the raw text first, instead of forcing .json()
       const textResponse = await res.text();
       let data: any = {};
       
@@ -76,7 +101,6 @@ export default function AdminDashboard() {
         try {
           data = JSON.parse(textResponse);
         } catch (e) {
-          // If it's not JSON, just wrap the raw text in an object
           data = { message: textResponse }; 
         }
       }
@@ -134,7 +158,6 @@ export default function AdminDashboard() {
           <h2 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2">2. Timeline & Deadlines</h2>
           
           <div className="space-y-6">
-            {/* Override Clock */}
             <div className="flex flex-col md:flex-row gap-4 items-start md:items-end justify-between bg-slate-50 p-4 rounded-lg border border-slate-100">
               <div className="w-full">
                 <label className="block text-sm font-bold text-slate-700 mb-1">Master Deadline</label>
@@ -143,7 +166,7 @@ export default function AdminDashboard() {
                   type="datetime-local" 
                   value={deadlineString}
                   onChange={(e) => setDeadlineString(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white"
+                  className="w-full p-2 border text-slate-900 border-slate-300 rounded focus:ring-2 focus:ring-amber-500 outline-none bg-white"
                 />
               </div>
               <button 
@@ -154,7 +177,6 @@ export default function AdminDashboard() {
               </button>
             </div>
 
-            {/* Lockout */}
             <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
               <div>
                 <p className="font-bold text-amber-700">Force Saturday Lockout</p>
@@ -168,11 +190,10 @@ export default function AdminDashboard() {
               </button>
             </div>
 
-            {/* Rollover */}
             <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between border-t pt-4">
               <div>
                 <p className="font-bold text-rose-600">Tuesday Weekly Rollover</p>
-                <p className="text-sm text-slate-500">Finalizes all points and officially opens the next Gameweek. Only click when the real-world week is completely finished.</p>
+                <p className="text-sm text-slate-500">Finalizes all points and officially opens the next Gameweek.</p>
               </div>
               <button 
                 onClick={() => triggerApiRoute('/api/admin/trigger-calculate-points?rollover=true', 'Tuesday Rollover')}
@@ -184,9 +205,45 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        {/* SECTION 3: DANGER ZONE */}
+        {/* SECTION 3: PUBLISH NEWSLETTER */}
+        <section className="bg-white p-6 rounded-xl border border-sky-200 shadow-sm">
+          <h2 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2 flex items-center gap-2">
+            <svg className="w-5 h-5 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9.5L18.5 8H20"></path></svg>
+            3. Commissioner's Corner
+          </h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Headline</label>
+              <input 
+                type="text" 
+                placeholder="e.g., Gameweek 5 Updates & Banter"
+                value={newsTitle}
+                onChange={(e) => setNewsTitle(e.target.value)}
+                className="w-full p-2 border text-slate-900 border-slate-300 rounded focus:ring-2 focus:ring-sky-500 outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Message Body</label>
+              <textarea 
+                rows={5}
+                placeholder="Write your update here... it will immediately appear on everyone's dashboard."
+                value={newsContent}
+                onChange={(e) => setNewsContent(e.target.value)}
+                className="w-full p-2 border text-slate-900 border-slate-300 rounded focus:ring-2 focus:ring-sky-500 outline-none resize-y"
+              />
+            </div>
+            <button 
+              onClick={handlePublishNewsletter}
+              className="w-full bg-sky-600 text-white font-bold py-3 rounded hover:bg-sky-700 transition"
+            >
+              Broadcast Newsletter
+            </button>
+          </div>
+        </section>
+
+        {/* SECTION 4: DANGER ZONE */}
         <section className="bg-rose-50 p-6 rounded-xl border border-rose-200 shadow-sm">
-          <h2 className="text-lg font-bold text-rose-800 mb-4 border-b border-rose-200 pb-2">3. Pre-Season Setup (Danger Zone)</h2>
+          <h2 className="text-lg font-bold text-rose-800 mb-4 border-b border-rose-200 pb-2">4. Pre-Season Setup (Danger Zone)</h2>
           <p className="text-sm text-rose-600 mb-4">Do not click these while a season is active. These will overwrite existing database records.</p>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
