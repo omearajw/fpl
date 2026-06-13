@@ -46,16 +46,14 @@ useEffect(() => {
 
       if (profileData) setManagerInfo(profileData);
 
-      // --- NEW: Find the latest active gameweek for this user ---
-      const { data: latestGwData } = await supabase
-        .from('rosters')
-        .select('gameweek')
-        .eq('user_id', uid)
-        .order('gameweek', { ascending: false })
-        .limit(1)
+      // Read from the Master Clock
+      const { data: settingsData } = await supabase
+        .from('system_settings')
+        .select('active_gameweek, next_gameweek')
         .single();
-
-      const activeGameweek = latestGwData?.gameweek || 1;
+        
+      // Transfers and Pick Team always look at the active_gameweek
+      const activeGameweek = settingsData?.next_gameweek || 1;
       setActiveGameweek(activeGameweek);
 
       // --- UPDATED: Filter the roster by that active gameweek ---

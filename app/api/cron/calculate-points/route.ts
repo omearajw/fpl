@@ -7,45 +7,46 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // 1. Determine the NEXT Gameweek
-    const { data: latestGW } = await supabase
-      .from('gameweek_scores')
-      .select('gameweek')
-      .order('gameweek', { ascending: false })
-      .limit(1)
+    // Check if we are running the final Tuesday Rollover
+    const { searchParams } = new URL(request.url);
+    const isTuesdayRollover = searchParams.get('rollover') === 'true';
+
+    // 1. Read from the Master Clock
+    const { data: settings } = await supabase
+      .from('system_settings')
+      .select('active_gameweek, next_gameweek')
       .single();
 
-    const nextGameweek = (latestGW?.gameweek || 0) + 1;
+    if (!settings) throw new Error("System settings not found.");
 
-// 2. Fetch all managers' STARTING rosters
+    // The gameweek we are calculating scores for is being played in real-time, so we use the active_gameweek for scoring
+    const processingGW = settings.active_gameweek; 
+
+    // 2. Fetch all managers' STARTING rosters for the active weekend
     const { data: starters, error: rosterError } = await supabase
       .from('rosters')
       .select('user_id, player_id')
       .eq('is_starter', true)
-      .eq('gameweek', nextGameweek); // <-- ADD THIS FILTER!
+      .eq('gameweek', processingGW);
 
     if (rosterError || !starters || starters.length === 0) {
-      return NextResponse.json({ message: `No starting players found for Gameweek ${nextGameweek}.` }, { status: 400 });
+      return NextResponse.json({ message: `No starting players found for Gameweek ${processingGW}.` }, { status: 400 });
     }
 
     // 3. --- LIVE FPL DATA FETCH ---
     let liveStatsMap: Record<number, any> = {};
     
     if (!USE_MOCK_DATA) {
-      console.log(`Fetching LIVE data from official FPL API for Gameweek ${nextGameweek}...`);
-      
-      // We make ONE call to get every player in the league
-      const response = await fetch(`https://fantasy.premierleague.com/api/event/${nextGameweek}/live/`);
+      console.log(`Fetching LIVE data from official FPL API for Gameweek ${processingGW}...`);
+      const response = await fetch(`https://fantasy.premierleague.com/api/event/${processingGW}/live/`);
       
       if (!response.ok) {
-         throw new Error(`FPL API returned status: ${response.status}. The gameweek might not exist yet.`);
+         throw new Error(`FPL API returned status: ${response.status}.`);
       }
 
       const fplData = await response.json();
-
-      // Transform the FPL array into a fast lookup dictionary: { player_id: stats_object }
       if (fplData.elements) {
         fplData.elements.forEach((player: any) => {
           liveStatsMap[player.id] = player.stats; 
@@ -60,7 +61,6 @@ export async function GET() {
       let points = 0;
 
       if (USE_MOCK_DATA) {
-        // Mock off-season data (Randomizer)
         const minutesPlayed = Math.random() > 0.15 ? 90 : 0; 
         const goalsScored = Math.random() > 0.90 ? 1 : 0;    
         const cleanSheet = Math.random() > 0.65;             
@@ -69,26 +69,19 @@ export async function GET() {
         else if (minutesPlayed > 0) points += 1;
         points += goalsScored * 5; 
         if (cleanSheet) points += 4;
-        
       } else {
-        // --- REAL LIVE DATA ---
         const realStats = liveStatsMap[roster.player_id];
-        
-        if (realStats) {
-          // For now, we are pulling the official rudimentary FPL score directly
-          points = realStats.total_points || 0;
-        }
+        if (realStats) points = realStats.total_points || 0;
       }
 
-      // Add to the manager's weekly bucket
       userPoints[roster.user_id] = (userPoints[roster.user_id] || 0) + points;
     });
 
-    // 5. Fetch PREVIOUS running totals
+    // 5. Fetch PREVIOUS running totals (processingGW - 1)
     const { data: previousScores } = await supabase
       .from('gameweek_scores')
       .select('user_id, running_total')
-      .eq('gameweek', nextGameweek - 1);
+      .eq('gameweek', processingGW - 1);
 
     const previousTotals: Record<string, number> = {};
     if (previousScores) {
@@ -104,49 +97,42 @@ export async function GET() {
       
       return {
         user_id: userId,
-        gameweek: nextGameweek,
+        gameweek: processingGW,
         points_earned: pointsEarned,
         running_total: prevTotal + pointsEarned
       };
     });
 
-    // 7. Write to Supabase
-    const { error: insertError } = await supabase
+    // 7. Write to Supabase (CHANGED TO UPSERT FOR SAFETY)
+    // You MUST ensure your gameweek_scores table has a unique constraint on (user_id, gameweek)
+    const { error: upsertError } = await supabase
       .from('gameweek_scores')
-      .insert(insertPayload);
+      .upsert(insertPayload, { onConflict: 'user_id, gameweek' });
 
-    if (insertError) throw insertError;
+    if (upsertError) throw upsertError;
 
-    // 8. --- THE AUTO-ROLLOVER ---
-    // Fetch every player's roster from the gameweek we just finished scoring
-    const { data: currentRosters, error: fetchRostersError } = await supabase
-      .from('rosters')
-      .select('*')
-      .eq('gameweek', nextGameweek);
+    // ==========================================
+    // 8. --- THE TUESDAY AUTO-ROLLOVER ---
+    // ==========================================
+    if (isTuesdayRollover) {
+      // NOTE: Roster duplication has been moved to the Lockout script!
+      
+      // We just need to advance the Active Master Clock to catch up to the Next GW
+      await supabase
+        .from('system_settings')
+        .update({
+          active_gameweek: processingGW + 1
+        })
+        .eq('id', 1);
 
-    if (fetchRostersError) throw fetchRostersError;
-
-    if (currentRosters && currentRosters.length > 0) {
-      // Duplicate them, strip out the old UUIDs, and stamp them with the new Gameweek
-      const rolloverPayload = currentRosters.map(roster => {
-        const { id, ...rest } = roster; // Remove the old primary key so Supabase generates new ones
-        return {
-          ...rest,
-          gameweek: nextGameweek + 1
-        };
+      return NextResponse.json({ 
+        message: `SUCCESS: Gameweek ${processingGW} finalized! Active GW advanced to ${processingGW + 1}.`,
       });
-
-      // Insert the duplicated squads into the database
-      const { error: rolloverError } = await supabase
-        .from('rosters')
-        .insert(rolloverPayload);
-
-      if (rolloverError) throw rolloverError;
     }
 
-    // Return the final success message
+    // If it's just a weekend live-update run...
     return NextResponse.json({ 
-      message: `Gameweek ${nextGameweek} calculation complete! All rosters rolled over to Gameweek ${nextGameweek + 1}. (Mock Data: ${USE_MOCK_DATA})`,
+      message: `LIVE UPDATE: Scores for Gameweek ${processingGW} updated. No rollover performed.`,
     });
 
   } catch (error: any) {

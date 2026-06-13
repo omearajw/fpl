@@ -17,6 +17,8 @@ export default function LeagueTables() {
   
   const [leagueData, setLeagueData] = useState<Record<number, any[]>>({});
   const [activeGw, setActiveGw] = useState<number>(1);
+  const [displayGw, setDisplayGw] = useState<number>(1);
+  const [isLive, setIsLive] = useState<boolean>(false);
   const [thirdPlacePoints, setThirdPlacePoints] = useState<number>(0);
   const [sprintLeaderboard, setSprintLeaderboard] = useState<any[]>([]);
 
@@ -47,26 +49,35 @@ export default function LeagueTables() {
         setBottomLeagueId(bottomLgId);
       }
 
-      // 2. Find the current gameweek
-      const { data: latestGwData } = await supabase
-        .from('gameweek_scores')
-        .select('gameweek')
-        .order('gameweek', { ascending: false })
-        .limit(1)
+      // 2. Read from the Master Clock
+      const { data: settingsData } = await supabase
+        .from('system_settings')
+        .select('active_gameweek, next_gameweek')
         .single();
-
-      const currentGameweek = latestGwData?.gameweek || 1;
+        
+      const currentGameweek = settingsData?.active_gameweek || 1;
+      const nextGameweek = settingsData?.next_gameweek || 1;
       setActiveGw(currentGameweek);
+
+      // We know we are in the "Live Weekend" (Phase 2) if the lockout script has advanced the next_gameweek
+      const isWeekendLive = currentGameweek !== nextGameweek;
+      setIsLive(isWeekendLive);
+
+      // Determine which gameweek is actually being displayed on the table
+      const gwToShow = isWeekendLive ? currentGameweek : Math.max(1, currentGameweek - 1);
+      setDisplayGw(gwToShow);
 
       // 3. Fetch all necessary data simultaneously
       const [
         { data: h2hData }, 
         { data: usersData }, 
-        { data: currentGwScores }
+        { data: recentScores }
       ] = await Promise.all([
         supabase.from('h2h_league_table').select('*'),
         supabase.from('users').select('id, league_id, transfers_remaining'),
-        supabase.from('gameweek_scores').select('user_id, points_earned').eq('gameweek', currentGameweek)
+        supabase.from('gameweek_scores')
+          .select('user_id, points_earned, running_total, gameweek')
+          .in('gameweek', [currentGameweek, currentGameweek - 1]) // Fetch both current and previous weeks
       ]);
 
       if (h2hData && usersData) {
@@ -78,23 +89,46 @@ export default function LeagueTables() {
 
         // Map users for easy lookup
         const userMap = new Map(usersData.map(u => [u.id, u]));
-        const gwScoreMap = new Map(currentGwScores?.map(s => [s.user_id, s.points_earned]) || []);
 
         h2hData.forEach((row: any) => {
           const userMeta = userMap.get(row.user_id);
           const l_id = userMeta?.league_id;
           
           if (l_id && groupedData[l_id]) {
+            // --- SMART UI SWITCH ---
+            let gwPts = 0;
+            let fplPts = 0;
+            
+            const activeScore = recentScores?.find(s => s.user_id === row.user_id && s.gameweek === currentGameweek);
+            const previousScore = recentScores?.find(s => s.user_id === row.user_id && s.gameweek === currentGameweek - 1);
+
+            if (isWeekendLive) {
+              // PHASE 2: The weekend is live!
+              if (activeScore) {
+                // Live points have been pulled
+                gwPts = activeScore.points_earned;
+                fplPts = activeScore.running_total;
+              } else {
+                // The lockout JUST happened, but no live points exist yet. Wipe GW points to 0!
+                gwPts = 0;
+                fplPts = previousScore?.running_total || 0; // Hold onto last week's FPL total so it doesn't drop to 0
+              }
+            } else {
+              // PHASE 1: Midweek buildup. Show last week's fully finalized stats.
+              gwPts = previousScore?.points_earned || 0;
+              fplPts = previousScore?.running_total || 0;
+            }
+
             groupedData[l_id].push({
               userId: row.user_id,
               teamName: row.team_name || 'Unknown Team',
               manager: row.manager_name || 'Unknown',
-              gwPoints: gwScoreMap.get(row.user_id) || 0,
+              gwPoints: gwPts,
               won: row.won,
               drawn: row.drawn,
               lost: row.lost,
               h2hPoints: row.total_h2h_points,
-              totalPoints: row.points_for, // The total FPL score acts as tiebreaker
+              totalPoints: fplPts, // We now pass the live running_total here!
               transfers: userMeta?.transfers_remaining || 0,
             });
           }
@@ -226,7 +260,21 @@ export default function LeagueTables() {
         {/* Page Header */}
         <div className="mb-8">
           <h2 className="text-3xl font-extrabold text-slate-900">League Standings</h2>
-          <p className="text-slate-500 mt-2">Gameweek {activeGw} • Head-to-Head Scoring</p>
+          <div className="flex flex-wrap items-center gap-3 mt-2">
+            <p className="text-slate-500 font-medium">Gameweek {displayGw} • Head-to-Head Scoring</p>
+            
+            {/* Dynamic Status Badge */}
+            {isLive ? (
+              <span className="bg-rose-100 text-rose-700 text-[10px] uppercase font-bold px-2 py-0.5 rounded flex items-center gap-1.5 border border-rose-200">
+                <span className="w-1.5 h-1.5 bg-rose-500 rounded-full animate-pulse"></span>
+                Live Matches
+              </span>
+            ) : (
+              <span className="bg-slate-200 text-slate-600 text-[10px] uppercase font-bold px-2 py-0.5 rounded border border-slate-300">
+                {displayGw === 1 && !isLive && activeGw === 1 ? 'Pre-Season' : 'Finalized Results'}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Dynamic Tier Navigation Tabs */}
@@ -269,7 +317,8 @@ export default function LeagueTables() {
               ) : (
               currentTeams.map((team, index) => {
                   // Calculate if they are in the play-off zone (3rd place, or 4th+ within 9 points)
-                  const isPlayoffZone = isBottomLeagueActive && index >= 2 && (thirdPlacePoints - team.h2hPoints) <= 9;
+                  // ONLY TRUE IF WE ARE IN GAMEWEEK 33 OR LATER
+                  const isPlayoffZone = activeGw >= 33 && isBottomLeagueActive && index >= 2 && (thirdPlacePoints - team.h2hPoints) <= 9;
                   const status = getRowStatus(index, isPlayoffZone);
                   
                   return (
@@ -287,7 +336,6 @@ export default function LeagueTables() {
                             {team.teamName}
                           </a>
                           <span className="text-slate-500 text-xs mt-0.5">{team.manager}</span>
-                          {/* The "In The Hunt" badge has been fully removed as requested */}
                         </div>
                       </td>
                       

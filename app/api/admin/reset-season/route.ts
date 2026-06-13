@@ -25,10 +25,20 @@ export async function POST() {
     if (rostersError) throw rostersError;
 
     // 3. (Optional) Reset all user transfers back to 8
-    await supabaseAdmin
+    const { error: transfersError } = await supabaseAdmin
       .from('users')
       .update({ transfers_remaining: 8 })
       .neq('id', '00000000-0000-0000-0000-000000000000'); // Hack to target all users
+      
+    if (transfersError) throw transfersError;
+
+    // 4. Reset the Master Clock back to Gameweek 1
+    const { error: clockError } = await supabaseAdmin
+      .from('system_settings')
+      .update({ active_gameweek: 1, next_gameweek: 1 })
+      .eq('id', 1);
+
+    if (clockError) throw clockError;
 
     return NextResponse.json({ message: "Season successfully reset to Gameweek 1!" });
   } catch (error: any) {

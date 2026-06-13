@@ -169,16 +169,14 @@ export default function TransfersHub() {
       // Filter to only the players that need to be inserted into the database
       const addedPlayers = finalSquad.filter(p => !dbSquad.some(db => db.id === p.id));
 
-      // --- NEW: FETCH ACTIVE GAMEWEEK BEFORE SAVING ---
-      const { data: latestGwData } = await supabase
-        .from('rosters')
-        .select('gameweek')
-        .eq('user_id', userId)
-        .order('gameweek', { ascending: false })
-        .limit(1)
+      // Read from the Master Clock
+      const { data: settingsData } = await supabase
+        .from('system_settings')
+        .select('active_gameweek, next_gameweek')
         .single();
-
-      const activeGameweek = latestGwData?.gameweek || 1;
+        
+      // Transfers and Pick Team always look at the active_gameweek
+      const activeGameweek = settingsData?.next_gameweek || 1;
 
       if (!isInitialDraft && transfersPending > 0) {
         const newTotal = transfersRemainingLimit - transfersPending;

@@ -44,6 +44,9 @@ export default function Navbar() {
           <Link href="/leagues" className={`transition ${isActive('/leagues') ? 'text-emerald-400' : 'hover:text-emerald-400'}`}>
             Leagues
           </Link>
+          <Link href="/fixtures" className={`transition ${isActive('/fixtures') ? 'text-emerald-400' : 'hover:text-emerald-400'}`}>
+            Fixtures
+          </Link>
           <button onClick={handleLogout} className="text-slate-400 hover:text-rose-400 transition ml-4 border-l border-slate-700 pl-4">
             Log Out
           </button>

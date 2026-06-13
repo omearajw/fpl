@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import PageSkeleton from '../components/PageSkeleton';
 
 // Initialize Supabase
@@ -19,7 +20,12 @@ export default function Dashboard() {
   const [topStandings, setTopStandings] = useState<any[]>([]);
   const [userRank, setUserRank] = useState<number | string>('-');
   const [userPoints, setUserPoints] = useState<number | string>(0);
+  const [userH2hPts, setUserH2hPts] = useState<number | string>('-');
   
+  // Fixtures State
+  const [activeGw, setActiveGw] = useState<number>(1);
+  const [currentMatchup, setCurrentMatchup] = useState<any>(null);
+
   // Newsletter State
   const [newsletter, setNewsletter] = useState<any>(null);
 
@@ -43,52 +49,111 @@ export default function Dashboard() {
 
       if (profileData) setManagerInfo(profileData);
 
+      // 3. Read from the Master Clock
+      const { data: settingsData } = await supabase
+        .from('system_settings')
+        .select('active_gameweek, next_gameweek')
+        .single();
+        
+      const currentGw = settingsData?.active_gameweek || 1;
+      setActiveGw(currentGw);
 
-      // 3. Fetch league-mates using the current user's league_id
+      // 4. Fetch the User's Matchup for the Current Gameweek
+      const { data: matchupData } = await supabase
+        .from('fixtures')
+        .select(`
+          id,
+          gameweek,
+          home_user_id,
+          away_user_id,
+          home:users!fixtures_home_user_id_fkey(id, team_name, manager_name),
+          away:users!fixtures_away_user_id_fkey(id, team_name, manager_name)
+        `)
+        .eq('gameweek', currentGw)
+        .or(`home_user_id.eq.${uid},away_user_id.eq.${uid}`)
+        .single();
+
+      if (matchupData) {
+        // Fetch the live scores for this specific matchup
+        const { data: scoresData } = await supabase
+          .from('gameweek_scores')
+          .select('user_id, points_earned')
+          .eq('gameweek', currentGw)
+          .in('user_id', [matchupData.home_user_id, matchupData.away_user_id].filter(Boolean));
+
+        const scoreMap = new Map(scoresData?.map(s => [s.user_id, s.points_earned]) || []);
+
+        setCurrentMatchup({
+          ...matchupData,
+          homeScore: scoreMap.get(matchupData.home_user_id) || 0,
+          awayScore: matchupData.away_user_id ? (scoreMap.get(matchupData.away_user_id) || 0) : null,
+        });
+      }
+
+      // 5. Fetch Live Total FPL Points
+      // (This continues to live-update during the weekend)
+      const { data: userLiveScore } = await supabase
+        .from('gameweek_scores')
+        .select('running_total')
+        .eq('user_id', uid)
+        .eq('gameweek', currentGw)
+        .single();
+        
+      if (userLiveScore) {
+        setUserPoints(userLiveScore.running_total);
+      } else {
+        // Fallback to previous week if weekend just started
+        const { data: prevScore } = await supabase
+          .from('gameweek_scores')
+          .select('running_total')
+          .eq('user_id', uid)
+          .eq('gameweek', Math.max(1, currentGw - 1))
+          .single();
+        if (prevScore) setUserPoints(prevScore.running_total);
+      }
+
+      // 6. Fetch Official H2H Standings & Rank
       const leagueId = profileData?.league_id;
 
       if (leagueId) {
-        const { data: leagueMates } = await supabase
-          .from('users')
-          .select('id')
-          .eq('league_id', leagueId);
+        const [
+          { data: h2hData },
+          { data: usersData }
+        ] = await Promise.all([
+          supabase.from('h2h_league_table').select('*'),
+          supabase.from('users').select('id, league_id, transfers_remaining').eq('league_id', leagueId)
+        ]);
 
-        const leagueMateIds = leagueMates?.map(u => u.id) ?? [];
+        if (h2hData && usersData) {
+          const leagueUserIds = new Set(usersData.map(u => u.id));
+          const leagueH2H = h2hData.filter(row => leagueUserIds.has(row.user_id));
+          const userMap = new Map(usersData.map(u => [u.id, u]));
 
-        const { data: scoresData } = await supabase
-          .from('gameweek_scores')
-          .select(`
-            user_id,
-            gameweek,
-            running_total,
-            users (team_name, manager_name)
-          `)
-          .in('user_id', leagueMateIds)
-          .order('gameweek', { ascending: false });
+          const enrichedStandings = leagueH2H.map(row => ({
+            ...row,
+            transfers: userMap.get(row.user_id)?.transfers_remaining || 0
+          }));
 
-        if (scoresData && scoresData.length > 0) {
-          // Deduplicate: keep only the latest row per user (highest gameweek = current running_total)
-          const latestByUser = new Map<string, any>();
-          for (const row of scoresData) {
-            if (!latestByUser.has(row.user_id)) {
-              latestByUser.set(row.user_id, row);
-            }
-          }
+          // Sort exactly like the Leagues page: 1. H2H Pts, 2. FPL Pts, 3. Transfers Left
+          enrichedStandings.sort((a, b) => {
+            if (b.total_h2h_points !== a.total_h2h_points) return b.total_h2h_points - a.total_h2h_points;
+            if (b.points_for !== a.points_for) return b.points_for - a.points_for;
+            return b.transfers - a.transfers;
+          });
 
-          const standingsData = Array.from(latestByUser.values())
-            .sort((a, b) => (b.running_total || 0) - (a.running_total || 0));
-
-          const rankIndex = standingsData.findIndex(s => s.user_id === uid);
+          // Find current user's official rank and H2H points
+          const rankIndex = enrichedStandings.findIndex(s => s.user_id === uid);
           if (rankIndex !== -1) {
             setUserRank(rankIndex + 1);
-            setUserPoints(standingsData[rankIndex].running_total || 0);
+            setUserH2hPts(enrichedStandings[rankIndex].total_h2h_points || 0);
           }
 
-          const formattedTop5 = standingsData.slice(0, 5).map((s: any, index: number) => ({
+          // Format the Top 5 for the sidebar widget
+          const formattedTop5 = enrichedStandings.slice(0, 5).map((s: any, index: number) => ({
             rank: index + 1,
-            name: s.users?.team_name || 'Unknown Team',
-            manager: s.users?.manager_name || 'Unknown',
-            pts: s.running_total || 0,
+            name: s.team_name || 'Unknown Team',
+            manager: s.manager_name || 'Unknown',
+            pts: s.total_h2h_points || 0,
             highlight: s.user_id === uid
           }));
 
@@ -96,7 +161,7 @@ export default function Dashboard() {
         }
       }
 
-      // 4. Fetch Latest Newsletter
+      // 7. Fetch Latest Newsletter
       const { data: newsData } = await supabase
         .from('newsletters')
         .select('*')
@@ -112,70 +177,69 @@ export default function Dashboard() {
     loadDashboard();
   }, [router]);
 
-    const handleSimulateGameweek = async () => {
-    const isConfirmed = window.confirm("Are you sure you want to simulate a full weekend of fixtures?");
+  // --- DEVELOPER TOOL ACTIONS ---
+  const handleTriggerLockout = async () => {
+    const isConfirmed = window.confirm("Phase 1: Trigger Deadline Lockout? Transfers will be locked and Next GW advanced.");
     if (!isConfirmed) return;
-
     setIsLoading(true);
     try {
-    const res = await fetch('/api/cron/calculate-points');
+      const res = await fetch('/api/cron/lockout');
       const data = await res.json();
-      
-      if (res.ok) {
-        alert(data.message);
-        window.location.reload(); // Refresh the page to see the new data!
-      } else {
-        alert(`Error: ${data.error || data.message}`);
-      }
-    } catch (err) {
-      alert("Failed to run simulation.");
-    }
+      if (res.ok) { alert(data.message); window.location.reload(); }
+      else { alert(`Error: ${data.error || data.message}`); }
+    } catch (err) { alert("Failed to trigger lockout."); }
+    setIsLoading(false);
+  };
+
+  const handleUpdateLivePoints = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/cron/calculate-points');
+      const data = await res.json();
+      if (res.ok) { alert(data.message); window.location.reload(); }
+      else { alert(`Error: ${data.error || data.message}`); }
+    } catch (err) { alert("Failed to update live points."); }
+    setIsLoading(false);
+  };
+
+  const handleTriggerRollover = async () => {
+    const isConfirmed = window.confirm("Phase 3: Run Tuesday Rollover? This finalizes points and advances the Active GW.");
+    if (!isConfirmed) return;
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/cron/calculate-points?rollover=true');
+      const data = await res.json();
+      if (res.ok) { alert(data.message); window.location.reload(); }
+      else { alert(`Error: ${data.error || data.message}`); }
+    } catch (err) { alert("Failed to trigger rollover."); }
     setIsLoading(false);
   };
 
   const handleSeedBots = async () => {
     const amount = window.prompt("How many fully-rostered Bot teams do you want to create?", "5");
     if (!amount || isNaN(Number(amount))) return;
-
     setIsLoading(true);
     try {
       const res = await fetch('/api/admin/seed-bots', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ count: Number(amount) }) 
-        // Note: You can pass a specific leagueId here if you want them assigned immediately
       });
-      
       const data = await res.json();
-      if (res.ok) {
-        alert(data.message);
-      } else {
-        alert(`Error: ${data.error}`);
-      }
-    } catch (err) {
-      alert("Failed to seed bots.");
-    }
+      if (res.ok) { alert(data.message); } else { alert(`Error: ${data.error}`); }
+    } catch (err) { alert("Failed to seed bots."); }
     setIsLoading(false);
   };
 
   const handleResetSeason = async () => {
     const isConfirmed = window.confirm("⚠️ DANGER: Are you sure you want to completely reset the season? This will delete all points and revert all rosters to Gameweek 1.");
     if (!isConfirmed) return;
-
     setIsLoading(true);
     try {
       const res = await fetch('/api/admin/reset-season', { method: 'POST' });
       const data = await res.json();
-      
-      if (res.ok) {
-        alert(data.message);
-        window.location.reload();
-      } else {
-        alert(`Error: ${data.error}`);
-      }
-    } catch (err) {
-      alert("Failed to reset season.");
-    }
+      if (res.ok) { alert(data.message); window.location.reload(); } else { alert(`Error: ${data.error}`); }
+    } catch (err) { alert("Failed to reset season."); }
     setIsLoading(false);
   };
 
@@ -189,27 +253,11 @@ export default function Dashboard() {
                 <h2 className="text-2xl font-extrabold text-slate-900">Welcome back, Manager</h2>
                 <p className="text-slate-500 font-medium">Your team name here</p>
               </div>
-
-              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-4">
-                {Array.from({ length: 4 }).map((_, idx) => (
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 grid grid-cols-2 md:grid-cols-5 gap-4">
+                {Array.from({ length: 5 }).map((_, idx) => (
                   <div key={idx} className="h-24 bg-slate-200 rounded-3xl" />
                 ))}
               </div>
-
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="bg-slate-800 text-white p-4" />
-                <div className="p-6 prose max-w-none text-slate-700 space-y-4">
-                  <div className="h-5 w-3/4 bg-slate-200 rounded-full" />
-                  <div className="h-5 w-full bg-slate-200 rounded-full" />
-                  <div className="h-5 w-5/6 bg-slate-200 rounded-full" />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden space-y-6 p-6">
-              <div className="h-10 bg-slate-200 rounded-xl" />
-              <div className="h-10 bg-slate-200 rounded-xl" />
-              <div className="h-10 bg-slate-200 rounded-xl" />
             </div>
           </main>
         </div>
@@ -219,7 +267,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans">
-
       <main className="max-w-6xl mx-auto py-8 px-4 grid grid-cols-1 lg:grid-cols-3 gap-8">
         
         {/* Main Column */}
@@ -232,21 +279,25 @@ export default function Dashboard() {
           </div>
 
           {/* Stat Banner */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 grid grid-cols-2 md:grid-cols-5 gap-4 text-center">
             <div>
               <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Gameweek</p>
-              <p className="text-3xl font-extrabold text-slate-800 mt-1">1</p> 
+              <p className="text-3xl font-extrabold text-slate-800 mt-1">{activeGw}</p> 
             </div>
             <div>
-              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Total Points</p>
+              <p className="text-xs text-indigo-500 font-bold uppercase tracking-wider">H2H Pts</p>
+              <p className="text-3xl font-extrabold text-indigo-600 mt-1">{userH2hPts}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">FPL Pts</p>
               <p className="text-3xl font-extrabold text-slate-800 mt-1">{userPoints}</p>
             </div>
             <div>
-              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Overall Rank</p>
+              <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">League Rank</p>
               <p className="text-3xl font-extrabold text-slate-800 mt-1">{userRank}</p>
             </div>
-            <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-200 flex flex-col justify-center">
-              <p className="text-xs text-emerald-800 font-bold uppercase tracking-wider">Transfers Left</p>
+            <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-200 flex flex-col justify-center col-span-2 md:col-span-1">
+              <p className="text-xs text-emerald-800 font-bold uppercase tracking-wider">Transfers</p>
               <p className="text-3xl font-extrabold text-emerald-600 mt-1">{managerInfo?.transfers_remaining || 0}</p>
             </div>
           </div>
@@ -271,43 +322,115 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+
           {/* Developer Tools */}
           <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl shadow-sm text-center flex flex-col gap-4">
-            <h3 className="text-rose-800 font-bold">Developer Tools</h3>
+            <h3 className="text-rose-800 font-bold">Time Machine Controls</h3>
             
-            <button 
-              onClick={handleSimulateGameweek}
-              className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-2 px-6 rounded shadow transition"
-            >
-              Simulate Next Gameweek
-            </button>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <button 
+                onClick={handleTriggerLockout}
+                className="bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
+              >
+                1. Trigger Lockout
+              </button>
 
-            <button 
-              onClick={handleSeedBots}
-              className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-2 px-6 rounded shadow transition"
-            >
-              Seed 🤖 Bot Teams
-            </button>
+              <button 
+                onClick={handleUpdateLivePoints}
+                className="bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
+              >
+                2. Live Pts Update
+              </button>
 
-            <button 
-              onClick={handleResetSeason}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded shadow transition mt-4 border border-red-800"
-            >
-              ⚠️ Reset Entire Season to GW1
-            </button>
+              <button 
+                onClick={handleTriggerRollover}
+                className="bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
+              >
+                3. Finalize & Rollover
+              </button>
+            </div>
+
+            <hr className="border-rose-200 my-2" />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <button 
+                onClick={handleSeedBots}
+                className="bg-slate-800 hover:bg-slate-900 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
+              >
+                Seed 🤖 Bot Teams
+              </button>
+
+              <button 
+                onClick={handleResetSeason}
+                className="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded shadow transition border border-red-800"
+              >
+                ⚠️ Reset Season
+              </button>
+            </div>
             
-            <p className="text-xs text-rose-500 font-medium">Use these to test the league mechanics during the off-season.</p>
+            <p className="text-[10px] text-rose-500 font-medium uppercase tracking-wide">Admin Test Tools</p>
           </div>
           
         </div>
 
         {/* Sidebar Column */}
         <div className="space-y-8">
+
+          {/* MATCHUP WIDGET */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+            <div className="flex justify-between items-end mb-4">
+              <h3 className="font-bold text-slate-900">Your Matchup</h3>
+              <span className="text-xs text-slate-500 font-medium">GW {activeGw}</span>
+            </div>
+
+            {!currentMatchup ? (
+              <div className="text-center py-6 text-sm text-slate-500 font-medium bg-slate-50 rounded-lg border border-slate-100">
+                No matchup found for this gameweek.
+              </div>
+            ) : (
+              <div className="flex items-stretch justify-between bg-slate-50 rounded-lg border border-slate-100 overflow-hidden">
+                {/* Home Team */}
+                <div className="flex-1 p-3 text-center flex flex-col justify-center">
+                  <Link href={`/team/${currentMatchup.home.id}`} className="font-bold text-slate-900 hover:text-emerald-600 transition text-sm line-clamp-1">
+                    {currentMatchup.home.team_name}
+                  </Link>
+                  <span className="text-[10px] text-slate-500 line-clamp-1">{currentMatchup.home.manager_name}</span>
+                </div>
+
+                {/* Score/VS */}
+                <div className="bg-slate-200 px-3 flex items-center justify-center font-mono font-bold text-base text-slate-800 border-x border-slate-300">
+                  {currentMatchup.homeScore} - {currentMatchup.awayScore !== null ? currentMatchup.awayScore : 'AVG'}
+                </div>
+
+                {/* Away Team */}
+                <div className="flex-1 p-3 text-center flex flex-col justify-center">
+                  {currentMatchup.away ? (
+                    <>
+                      <Link href={`/team/${currentMatchup.away.id}`} className="font-bold text-slate-900 hover:text-emerald-600 transition text-sm line-clamp-1">
+                        {currentMatchup.away.team_name}
+                      </Link>
+                      <span className="text-[10px] text-slate-500 line-clamp-1">{currentMatchup.away.manager_name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-bold text-slate-400 text-xs">BYE WEEK</span>
+                      <span className="text-[10px] text-slate-400">League Avg</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            <Link href="/fixtures" className="block text-center w-full mt-4 py-2.5 text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition border border-slate-300">
+              View Full Schedule
+            </Link>
+          </div>
+
           {/* Mini League Table */}
           <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="flex justify-between items-end mb-4">
               <h3 className="font-bold text-slate-900">League Standings</h3>
-              <span className="text-xs text-slate-500 font-medium">Top 5</span>
+              <span className="text-xs text-slate-500 font-medium">Top 5 • H2H Pts</span>
             </div>
             
             <div className="space-y-2">
@@ -325,7 +448,7 @@ export default function Dashboard() {
                         <p className={`text-xs truncate w-32 ${team.highlight ? 'text-slate-300' : 'text-slate-500'}`}>{team.manager}</p>
                       </div>
                     </div>
-                    <span className="font-extrabold">{team.pts}</span>
+                    <span className={`font-extrabold ${team.highlight ? 'text-indigo-400' : 'text-indigo-600'}`}>{team.pts}</span>
                   </div>
                 ))
               )}
