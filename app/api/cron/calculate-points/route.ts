@@ -9,6 +9,11 @@ const USE_MOCK_DATA = process.env.NEXT_PUBLIC_USE_MOCK_DATA === 'true';
 
 export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get('authorization');
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    
     // Check if we are running the final Tuesday Rollover
     const { searchParams } = new URL(request.url);
     const isTuesdayRollover = searchParams.get('rollover') === 'true';
