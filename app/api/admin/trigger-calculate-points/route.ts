@@ -52,7 +52,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const { isRollover } = await request.json();
+    const { searchParams } = new URL(request.url);
+    const isRollover = searchParams.get('rollover') === 'true';
     
     const rolloverParam = isRollover ? '?rollover=true' : '';
     

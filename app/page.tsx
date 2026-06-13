@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import PageSkeleton from '../components/PageSkeleton';
 
-// Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -14,7 +13,6 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export default function Dashboard() {
   const router = useRouter();
   
-  // Real Database States
   const [isLoading, setIsLoading] = useState(true);
   const [managerInfo, setManagerInfo] = useState<any>(null);
   const [topStandings, setTopStandings] = useState<any[]>([]);
@@ -22,16 +20,12 @@ export default function Dashboard() {
   const [userPoints, setUserPoints] = useState<number | string>(0);
   const [userH2hPts, setUserH2hPts] = useState<number | string>('-');
   
-  // Fixtures State
   const [activeGw, setActiveGw] = useState<number>(1);
   const [currentMatchup, setCurrentMatchup] = useState<any>(null);
-
-  // Newsletter State
   const [newsletter, setNewsletter] = useState<any>(null);
 
   useEffect(() => {
     async function loadDashboard() {
-      // 1. Authentication Lock
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         router.push('/login');
@@ -40,7 +34,6 @@ export default function Dashboard() {
 
       const uid = session.user.id;
 
-      // 2. Fetch Manager Profile
       const { data: profileData } = await supabase
         .from('users')
         .select('*')
@@ -49,7 +42,6 @@ export default function Dashboard() {
 
       if (profileData) setManagerInfo(profileData);
 
-      // 3. Read from the Master Clock
       const { data: settingsData } = await supabase
         .from('system_settings')
         .select('active_gameweek, next_gameweek')
@@ -58,7 +50,6 @@ export default function Dashboard() {
       const currentGw = settingsData?.active_gameweek || 1;
       setActiveGw(currentGw);
 
-      // 4. Fetch the User's Matchup for the Current Gameweek
       const { data: matchupData } = await supabase
         .from('fixtures')
         .select(`
@@ -74,7 +65,6 @@ export default function Dashboard() {
         .single();
 
       if (matchupData) {
-        // Fetch the live scores for this specific matchup
         const { data: scoresData } = await supabase
           .from('gameweek_scores')
           .select('user_id, points_earned')
@@ -90,8 +80,6 @@ export default function Dashboard() {
         });
       }
 
-      // 5. Fetch Live Total FPL Points
-      // (This continues to live-update during the weekend)
       const { data: userLiveScore } = await supabase
         .from('gameweek_scores')
         .select('running_total')
@@ -102,7 +90,6 @@ export default function Dashboard() {
       if (userLiveScore) {
         setUserPoints(userLiveScore.running_total);
       } else {
-        // Fallback to previous week if weekend just started
         const { data: prevScore } = await supabase
           .from('gameweek_scores')
           .select('running_total')
@@ -112,7 +99,6 @@ export default function Dashboard() {
         if (prevScore) setUserPoints(prevScore.running_total);
       }
 
-      // 6. Fetch Official H2H Standings & Rank
       const leagueId = profileData?.league_id;
 
       if (leagueId) {
@@ -134,21 +120,18 @@ export default function Dashboard() {
             transfers: userMap.get(row.user_id)?.transfers_remaining || 0
           }));
 
-          // Sort exactly like the Leagues page: 1. H2H Pts, 2. FPL Pts, 3. Transfers Left
           enrichedStandings.sort((a, b) => {
             if (b.total_h2h_points !== a.total_h2h_points) return b.total_h2h_points - a.total_h2h_points;
             if (b.points_for !== a.points_for) return b.points_for - a.points_for;
             return b.transfers - a.transfers;
           });
 
-          // Find current user's official rank and H2H points
           const rankIndex = enrichedStandings.findIndex(s => s.user_id === uid);
           if (rankIndex !== -1) {
             setUserRank(rankIndex + 1);
             setUserH2hPts(enrichedStandings[rankIndex].total_h2h_points || 0);
           }
 
-          // Format the Top 5 for the sidebar widget
           const formattedTop5 = enrichedStandings.slice(0, 5).map((s: any, index: number) => ({
             rank: index + 1,
             name: s.team_name || 'Unknown Team',
@@ -161,7 +144,6 @@ export default function Dashboard() {
         }
       }
 
-      // 7. Fetch Latest Newsletter
       const { data: newsData } = await supabase
         .from('newsletters')
         .select('*')
@@ -176,106 +158,6 @@ export default function Dashboard() {
 
     loadDashboard();
   }, [router]);
-
-  // --- DEVELOPER TOOL ACTIONS ---
-  const getAuthToken = async (): Promise<string | null> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || null;
-  };
-
-  const handleTriggerLockout = async () => {
-    const isConfirmed = window.confirm("Phase 1: Trigger Deadline Lockout? Transfers will be locked and Next GW advanced.");
-    if (!isConfirmed) return;
-    setIsLoading(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
-      
-      const res = await fetch('/api/admin/trigger-lockout', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok) { alert(data.message); window.location.reload(); }
-      else { alert(`Error: ${data.error || data.message}`); }
-    } catch (err) { alert("Failed to trigger lockout."); }
-    setIsLoading(false);
-  };
-
-  const handleUpdateLivePoints = async () => {
-    setIsLoading(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
-      
-      const res = await fetch('/api/admin/trigger-calculate-points', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ isRollover: false })
-      });
-      const data = await res.json();
-      if (res.ok) { alert(data.message); window.location.reload(); }
-      else { alert(`Error: ${data.error || data.message}`); }
-    } catch (err) { alert("Failed to update live points."); }
-    setIsLoading(false);
-  };
-
-  const handleTriggerRollover = async () => {
-    const isConfirmed = window.confirm("Phase 3: Run Tuesday Rollover? This finalizes points and advances the Active GW.");
-    if (!isConfirmed) return;
-    setIsLoading(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
-      
-      const res = await fetch('/api/admin/trigger-calculate-points', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ isRollover: true })
-      });
-      const data = await res.json();
-      if (res.ok) { alert(data.message); window.location.reload(); }
-      else { alert(`Error: ${data.error || data.message}`); }
-    } catch (err) { alert("Failed to trigger rollover."); }
-    setIsLoading(false);
-  };
-
-  const handleSeedBots = async () => {
-    const amount = window.prompt("How many fully-rostered Bot teams do you want to create?", "5");
-    if (!amount || isNaN(Number(amount))) return;
-    setIsLoading(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
-      
-      const res = await fetch('/api/admin/seed-bots', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ count: Number(amount) }) 
-      });
-      const data = await res.json();
-      if (res.ok) { alert(data.message); } else { alert(`Error: ${data.error}`); }
-    } catch (err) { alert("Failed to seed bots."); }
-    setIsLoading(false);
-  };
-
-  const handleResetSeason = async () => {
-    const isConfirmed = window.confirm("⚠️ DANGER: Are you sure you want to completely reset the season? This will delete all points and revert all rosters to Gameweek 1.");
-    if (!isConfirmed) return;
-    setIsLoading(true);
-    try {
-      const token = await getAuthToken();
-      if (!token) { alert("Not authenticated. Please log in."); setIsLoading(false); return; }
-      
-      const res = await fetch('/api/admin/reset-season', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok) { alert(data.message); window.location.reload(); } else { alert(`Error: ${data.error}`); }
-    } catch (err) { alert("Failed to reset season."); }
-    setIsLoading(false);
-  };
 
   if (isLoading) {
     return (
@@ -356,55 +238,6 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-
-          {/* Developer Tools */}
-          <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl shadow-sm text-center flex flex-col gap-4">
-            <h3 className="text-rose-800 font-bold">Time Machine Controls</h3>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <button 
-                onClick={handleTriggerLockout}
-                className="bg-amber-500 hover:bg-amber-600 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
-              >
-                1. Trigger Lockout
-              </button>
-
-              <button 
-                onClick={handleUpdateLivePoints}
-                className="bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
-              >
-                2. Live Pts Update
-              </button>
-
-              <button 
-                onClick={handleTriggerRollover}
-                className="bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
-              >
-                3. Finalize & Rollover
-              </button>
-            </div>
-
-            <hr className="border-rose-200 my-2" />
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <button 
-                onClick={handleSeedBots}
-                className="bg-slate-800 hover:bg-slate-900 text-white text-sm font-bold py-2 px-4 rounded shadow transition"
-              >
-                Seed 🤖 Bot Teams
-              </button>
-
-              <button 
-                onClick={handleResetSeason}
-                className="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded shadow transition border border-red-800"
-              >
-                ⚠️ Reset Season
-              </button>
-            </div>
-            
-            <p className="text-[10px] text-rose-500 font-medium uppercase tracking-wide">Admin Test Tools</p>
-          </div>
-          
         </div>
 
         {/* Sidebar Column */}

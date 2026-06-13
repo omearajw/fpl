@@ -135,11 +135,12 @@ export async function GET(request: Request) {
       // Set to exactly 11:00:00.000 AM UTC
       nextDeadline.setUTCHours(11, 0, 0, 0);
 
-      // Advance Active GW and set the new perfectly synced deadline
+      // Advance Active GW, sync Next GW, and set the new perfectly synced deadline
       const { error: updateError } = await supabase
         .from('system_settings')
         .update({
           active_gameweek: processingGW + 1,
+          next_gameweek: processingGW + 1,
           deadline_time: nextDeadline.toISOString()
         })
         .eq('id', 1);
