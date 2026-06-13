@@ -1,12 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
+import { verifyCronSecret } from '../../auth';
 
 // Initialize Supabase client using your environment variables
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-export async function GET() {
+export async function GET(request: Request) {
+  // Verify CRON_SECRET
+  const authError = verifyCronSecret(request);
+  if (authError) return authError;
   try {
     // 1. Fetch data from the official FPL API
     const response = await fetch('https://fantasy.premierleague.com/api/bootstrap-static/', {

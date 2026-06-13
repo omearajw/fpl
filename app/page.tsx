@@ -183,7 +183,7 @@ export default function Dashboard() {
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/lockout');
+      const res = await fetch('/api/cron/lockout', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -194,7 +194,7 @@ export default function Dashboard() {
   const handleUpdateLivePoints = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/calculate-points');
+      const res = await fetch('/api/cron/calculate-points', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -207,7 +207,7 @@ export default function Dashboard() {
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/cron/calculate-points?rollover=true');
+      const res = await fetch('/api/cron/calculate-points?rollover=true', {headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }});
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); }
       else { alert(`Error: ${data.error || data.message}`); }
@@ -222,7 +222,7 @@ export default function Dashboard() {
     try {
       const res = await fetch('/api/admin/seed-bots', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.CRON_SECRET}` },
         body: JSON.stringify({ count: Number(amount) }) 
       });
       const data = await res.json();
@@ -236,7 +236,10 @@ export default function Dashboard() {
     if (!isConfirmed) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/reset-season', { method: 'POST' });
+      const res = await fetch('/api/admin/reset-season', { 
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.CRON_SECRET}` }
+      });
       const data = await res.json();
       if (res.ok) { alert(data.message); window.location.reload(); } else { alert(`Error: ${data.error}`); }
     } catch (err) { alert("Failed to reset season."); }

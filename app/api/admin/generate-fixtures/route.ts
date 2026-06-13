@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { verifyAdminAccess } from '../../auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY! 
 );
 
-export async function POST() {
+export async function POST(request: Request) {
+  // Verify CRON_SECRET
+  const authError = await verifyAdminAccess(request);
+  if (authError) return authError;
+
   try {
     // 1. Fetch all managers in the league
     const { data: users, error: userError } = await supabase.from('users').select('id');

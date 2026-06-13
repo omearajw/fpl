@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
+import { verifyAdminAccess } from '../../auth';
 
 // Initialize Supabase using the SECRET Admin Key
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -23,7 +24,10 @@ const managersList = [
 
 const TEMPORARY_PASSWORD = 'RetroFPL2026!';
 
-export async function GET() {
+export async function GET(request: Request) {
+  // Verify CRON_SECRET
+  const authError = await verifyAdminAccess(request);
+  if (authError) return authError;
   const results = [];
 
   for (const manager of managersList) {

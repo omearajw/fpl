@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
+import { verifyAdminAccess } from '../../auth';
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,6 +14,10 @@ const getRandomPlayers = (array: any[], count: number) => {
 };
 
 export async function POST(request: Request) {
+  // Verify CRON_SECRET
+  const authError = await verifyAdminAccess(request);
+  if (authError) return authError;
+
   try {
     const { count, leagueId } = await request.json(); // How many bots to create
 
